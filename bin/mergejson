@@ -1,0 +1,24 @@
+#!/bin/bash
+
+if [[ $# -lt 1 ]] ; then
+  echo "format: mergejson inputfolder"
+  exit
+fi
+
+topfolder=$PWD
+[[ ! -z "$1" ]] && topfolder=$1
+
+shopt -s globstar
+
+pushd "$PWD"
+
+cd $topfolder
+
+for ff in ${topfolder%/}/*/
+do
+  relpath=`realpath --relative-to="$topfolder" "$ff"`
+  echo $relpath
+  jq -n 'reduce inputs as $s ({}; setpath(input_filename|sub(".tsv.json";".tsv")|sub(".jbids";"")|split("/")[1:];$s) )' ${relpath/}/**/*.{json,jbids,jnii,jnirs} > ${ff%/}.jbids
+done
+
+popd

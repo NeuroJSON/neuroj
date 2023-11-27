@@ -1,0 +1,28 @@
+#!/bin/bash
+
+if [[ $# -lt 1 ]] ; then
+  echo "format: bids2json outputfolder"
+  exit
+fi
+
+topfolder=$PWD
+[[ ! -z "$1" ]] && topfolder=$1
+
+pushd "$PWD"
+
+cd $topfolder
+
+folderlist=(${topfolder%/}/*/)
+
+if [[ $# -gt 1 ]] ; then
+  folderlist="${topfolder%/}/$2"
+fi
+
+for ff in $folderlist
+do
+  relpath=`realpath --relative-to="$topfolder" "$ff"`
+  echo $relpath
+  jq -n 'reduce inputs as $s ({}; setpath(input_filename|sub(".tsv.json";".tsv")|sub(".jbids";"")|split("/")[1:];$s) )' ${relpath/}/*.jbids > ${ff%/}.json
+done
+
+popd

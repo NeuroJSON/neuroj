@@ -1,0 +1,6 @@
+#!/bin/bash
+
+if [[ -L "$1" ]]; then
+    target=`readlink "$1"`
+    echo "{\"_DataLink_\" : \"symlink:$target\"}"
+fi

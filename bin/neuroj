@@ -1,0 +1,183 @@
+#!/usr/bin/perl
+###############################################################################
+#
+# NeuroJSON client (neuroj)
+#
+# Author:  Qianqian Fang <q.fang at neu.edu>
+# License: GPLv3
+# Version: 0.5
+# Github:  https://github.com/NeuroJSON/neuroj
+#
+###############################################################################
+#
+# Dependencies:
+#
+# For Linux and Mac OS: 
+#   jq, curl, octave, jbids (https://github.com/NeuroJSON/jbids - including 4
+#   submodules under tools), libparallel-forkmanager-perl (for Parallel::ForkManager)
+#   libwww-perl (for LWP::UserAgent), libjson-xs-perl (for JSON::XS)
+#
+# For Windows: please install cygwin64 (http://cygwin.com/) or MSYS2 (http://msys2.org/)
+#   please also install jq, curl, octave, jbids (https://github.com/NeuroJSON/jbids)
+#
+# Specifically, this script requires Perl 5.x and curl (if curl is not install 
+# in the path, it looks for the LWP::UserAgent perl modules).
+#
+# How to use:
+#    type "neuroj --help" to see the format
+#
+###############################################################################
+
+use strict;
+use warnings;
+no warnings 'uninitialized';
+
+if(@ARGV==0 || grep(/--help/,@ARGV)){
+    &printhelp;
+}
+
+my ($infolder, $outfolder, $dbname, $dsname, $threads);
+my %action=();
+my $serverurl="https://neurojson.io:7777";
+
+$threads=4;
+
+while(my $opt = $ARGV[0]) {
+    if($opt =~ /^-[-a-zA-Z]/){
+        if($opt eq '-i' || $opt eq '--input'){
+                shift;
+                $infolder=shift;
+                $infolder=~s/\/$//g;
+        }elsif($opt eq '-o' || $opt eq '--output'){
+                shift;
+                $outfolder=shift;
+                $outfolder=~s/\/$//g;
+        }elsif($opt eq '-db' || $opt eq '--database'){
+                shift;
+                $dbname=shift;
+        }elsif($opt eq '-ds' || $opt eq '--dataset'){
+                shift;
+                $dsname=shift;
+        }elsif($opt eq '-c' || $opt eq '--couchdb'){
+                shift;
+                $serverurl=shift;
+        }elsif($opt eq '-t' || $opt eq '--threads'){
+                shift;
+                $threads=shift;
+        }elsif($opt eq '-l' || $opt eq '--list'){
+                $action{"list"}=1;
+        }elsif($opt eq '-j' || $opt eq '--tojson'){
+                $action{"tojson"}=1;
+        }elsif($opt eq '-f' || $opt eq '--find'){
+                $action{"find"}=shift;
+        }elsif($opt eq '-d' || $opt eq '--download'){
+                $action{"download"}=1;
+        }
+        last;
+    }
+    shift;
+}
+
+if($infolder ne '' && $outfolder ne '') {
+print "here\n";
+    convert($infolder, $outfolder, $dbname, $dsname);
+}
+
+if(exists($action{"list"})) {
+    my $url =($dbname ne '') ? "$serverurl/$dbname/_all_docs" : "$serverurl/_dbs_info";
+
+    my $content=webget($url);
+    if($content ne ''){
+          print $content;
+    }
+}
+
+if(exists($action{"download"}) && $dbname ne '') {
+    my $url=($dsname ne '') ? "$serverurl/$dbname/$dsname" : "$serverurl/$dbname/";
+    my $content=webget($url);
+
+    if($content ne ''){
+          print $content;
+    }
+}
+
+if(exists($action{"find"}) && $dbname ne '') {
+    my $url ="$serverurl/$dbname/_find";
+    my $content=webpost($url, $action{'find'});
+    if($content ne ''){
+          print $content;
+    }
+}
+
+sub webget {
+    my ($url)=@_;
+
+    my $content=`curl -s -X GET "$url"`;
+    if($content eq ''){
+           eval("use LWP::UserAgent (); 1")  or warn "LWP::UserAgent is not available: $@";;
+           my $ua      = LWP::UserAgent->new();
+           my $response = $ua->get($url);
+           $content = $response->decoded_content;
+     }
+     return $content;
+}
+
+sub webpost {
+    my ($url, $formjson)=@_;
+
+    my $content=`curl -s --header 'Content-Type: application/json' -X POST -d '$formjson' '$url'`;
+    if($content eq ''){
+           eval("use LWP::UserAgent (); 1")  or warn "LWP::UserAgent is not available: $@";;
+           my $ua      = LWP::UserAgent->new();
+           my $json = JSON::PP->new;
+           my %form=$json->encode($formjson);
+           my $response = $ua->post($url, \%form);
+           $content = $response->decoded_content;
+     }
+     return $content;
+}
+
+sub convert {
+    my ($inputroot, $outputroot, $dbname, $dsname)=@_;
+    my @datasets = glob("$inputroot/*/");
+print "$inputroot\n";
+print join("\n",@datasets);
+return;
+    my @args=($inputroot, $outputroot);
+    if($dbname ne '') {
+        push(@args, $dbname);
+        push(@args, $dsname) if($dsname ne '');
+    }
+    print join('\t', @args);
+
+    eval("use Parallel::ForkManager; 1")  or warn "Parallel::ForkManager is not available: $@";;
+    my $manager = Parallel::ForkManager->new($threads);
+
+    foreach my $ds (@datasets) {
+        $manager->start and next;
+        system("folder2json",@args);
+        $manager->finish;
+    }
+    $manager->wait_all_children;
+}
+
+sub printhelp{
+    printf("Format: %s <param1> <param2> ...
+
+Suported flags include
+
+  -i/--input folderpath   path to the top folder of a data collection (such as OpenNeuro)
+  -o/--output folderpath  path to the output folder storing the converted JSON files
+  -db/--database dbname   database name (such as openneuro, openfnirs, dandi etc)
+  -ds/--dataset dataset   dataset name (a single dataset in a collection, such as ds00001)
+  -t/--threads num        set the thread number for parallel conversion (4 by default)
+  -c/--couchdb url        set the CouchDB REST API root url, use https://neurojson.io:7777 by default
+  -l/--list               list all datasets if -db is given; or the document if both -db/-ds are given
+  -f/--find '{\"selector\":,...}' use the CouchDB _find API to search dataset
+  -d/--download           retrieve and display JSON encoded dataset, or complete database (slow)
+",  $0);
+    exit 0;
+}
+      
+exit(0);
+1

@@ -1,0 +1,3 @@
+#!/bin/sh
+
+jq 'map( .. | objects | with_entries(select(.key=="_DataLink_")) | select(. != {}) )' $1

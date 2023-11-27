@@ -1,0 +1,157 @@
+#!/bin/bash
+#===============================================================================
+#
+#===============================================================================
+set -u #Treat unset variables as an error when substituting.
+
+if [[ $# -lt 3 ]] ; then
+  echo "format: folder2json /input/root/folder /output/root/folder database_name <dataset_name>"
+  exit
+fi
+
+if [[ $3 =~ ^https*:\/\/ ]]; then
+  ATTACH_URL=$3
+else
+  ATTACH_URL="https://neurojson.org/io/stat.cgi?action=get&db=$3&doc="
+fi
+
+#===============================================================================
+#
+#===============================================================================
+
+main() {
+  if [[ $# -ge 4 ]]; then # convert a single dataset
+    convert_dataset "$1" "$2" "$4"
+    [[ -d "$2/$4" ]] && bids2json "$2" "$4"
+  elif [[ -f "$1" ]]; then
+    convert_file $(dirname "$1") "$2" "$4" "$1"
+  else
+    convert_database "$@"
+  fi
+}
+
+#===============================================================================
+# convert_database(inputroot, outputroot)
+#===============================================================================
+
+function convert_database() {
+  if [[ -f "$1/dataset_description.json" ]]; then
+    convert_dataset "$1" "$2" "$4"
+  fi
+
+  echo "converting database ..."
+
+  for ds in ${1%/}/*/
+  do
+    local dsname=`basename ${ds%/}`
+    echo "### processing $dsname"
+    convert_dataset "$1" "$2" "$dsname"
+  done
+
+  echo bids2json "$2"
+  [[ -d "$2" ]] && bids2json "$2"    # merge all subject .jbids file and top-level json files to a single json for a database
+}
+
+#===============================================================================
+# convert_dataset(datasetroot, outputroot, dsname)
+#===============================================================================
+
+function convert_dataset() {
+  local dsname=$3
+
+  [[ -f "$2/${dsname%/}.json" ]] && return
+  shopt -s globstar
+
+  echo "converting dataset $dsname"
+
+  for ff in ${1%/}/${dsname%/}/**
+  do
+    convert_file "$1" "$2" "$dsname" "$ff"
+  done
+
+  echo mergejson "$2/${dsname}"
+  [[ -d "$2/${dsname}" ]] && mergejson "$2/${dsname}"   # merge subject-folder json files to a single .jbids file
+}
+
+#===============================================================================
+# convert_file(inputroot, outputroot, dsname, filename)
+#===============================================================================
+
+function convert_file() {
+  local dsname="$3"
+  local ff="$4"
+  local ds="$1/$dsname"
+
+  echo "converting file $ff"
+
+  fname=`basename "$ff"`
+
+  if [[ -L "$ff" ]]; then     # a symbolic link
+     relpath=`realpath --relative-to="$1" $(dirname "$ff")`
+     relpath="$relpath/$fname"
+  else
+     relpath=`realpath --relative-to="$1" "$ff"`
+  fi
+
+  outputdir=`dirname "$2/${relpath}"`
+
+  [[ ! -d "$outputdir" ]] && mkdir -p "$outputdir" # create output folder if not exist
+
+  if [[ -d "$ff" ]]; then       # a folder
+     return
+
+  elif [[ -L "$ff" ]]; then     # a symbolic link
+     link2json "$ff" > "$2/${relpath}.jbids"
+
+  elif [[ -z "$ff" ]]; then     # empty file or all white-space
+     echo "[]" > "$2/${relpath}.jbids"
+
+  elif [[ "${ff##*.}" == "tsv" || "${ff##*.}" == "csv" ]]; then    # tsv or csv files
+     filesize=$(stat -c %s "$ff")
+     if [[ "$filesize" -lt 262144 ]]; then  # tsv smaller than 256k is converted to digest
+         tsv2json "$ff" > "$2/${relpath}.jbids"
+     else
+         relpath2=`realpath --relative-to="$ds" "$ff"`
+         pathhash=`echo -n "/${relpath2}" | md5sum | cut -d ' ' -f 1`
+
+         [[ ! -d "$2/.att/$dsname" ]] && mkdir -p "$2/.att/${dsname%/}/"
+         tsv2json "$ff" > "$2/.att/${dsname%/}/${pathhash}.tsv.json"
+         echo "{\"_DataLink_\" : \"$ATTACH_URL${dsname%/}&file=${pathhash}.tsv.json\"}" > "$2/${relpath}.jbids"
+     fi
+
+  elif [[ "${ff##*.}" == "json" ]]; then   # json files
+     jq '.' "$ff" > "$2/${relpath}"
+
+  elif [[ "${ff##*.}" == "snirf" ]]; then  # snirf files - use octave+snirfy toolbox
+     relpath2=`realpath --relative-to="$ds" "$ff"`
+     pathhash=`echo -n "/${relpath2}" | md5sum | cut -d ' ' -f 1`
+
+     [[ ! -d "$2/.att/$dsname" ]] && mkdir -p "$2/.att/$dsname/"
+     cmd=$(cat <<EOF
+[d1,d2]=snirf2jbids('$ff', 'pathhash', '${pathhash}', 'compression','zlib','attachproto','${ATTACH_URL}${dsname%/}&file=');
+savebj('', d2, 'filename', '$2/.att/$dsname/${pathhash}-zlib.jdb','compression','zlib');
+savejson('', d1, 'filename', '$2/${relpath}.json');
+EOF
+)
+     octave-cli --eval "$cmd"
+
+  elif [[ "${ff##*.}" =~ "txt" || "${ff##*.}" == "md" || "${fname%.*}" =~ ^(README|CHANGES|CITATION|LICENSE)$ ]]; then # text files
+     jq -Rsa . "$ff" > "$2/${relpath}.jbids"
+
+  elif [[ "${ff##*.}" == "png" || "${ff##*.}" == "jpg" || "${ff##*.}" == "pdf" ]]; then # browser readable documents
+     [[ ! -d "$2/.att/$dsname" ]] && mkdir -p "$2/.att/$dsname/"
+     relpath2=`realpath --relative-to="$ds" "$ff"`
+     pathhash=`echo -n "/${relpath2}" | md5sum | cut -d ' ' -f 1`
+     cp -a "$ff" "$/.att/$dsname/${pathhash}.${ff##*.}"
+
+  else
+     echo "{\"_DataLink_\" : null}" > "$2/${relpath}.jbids"
+     echo "skipping ${ff}"
+  fi
+}
+
+#===============================================================================
+# run main function
+#===============================================================================
+
+main "$@"; exit
