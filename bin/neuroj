@@ -12,7 +12,7 @@
 #
 # Dependencies:
 #
-# For Linux and Mac OS: 
+# For Linux and Mac OS:
 #   jq, curl, octave, jbids (https://github.com/NeuroJSON/jbids - including 4
 #   submodules under tools), libparallel-forkmanager-perl (for Parallel::ForkManager)
 #   libwww-perl (for LWP::UserAgent), libjson-xs-perl (for JSON::XS)
@@ -20,7 +20,7 @@
 # For Windows: please install cygwin64 (http://cygwin.com/) or MSYS2 (http://msys2.org/)
 #   please also install jq, curl, octave, jbids (https://github.com/NeuroJSON/jbids)
 #
-# Specifically, this script requires Perl 5.x and curl (if curl is not install 
+# Specifically, this script requires Perl 5.x and curl (if curl is not install
 # in the path, it looks for the LWP::UserAgent perl modules).
 #
 # When using --convert, conversion for some of the data files, such as .snirf or
@@ -74,199 +74,203 @@ use strict;
 use warnings;
 no warnings 'uninitialized';
 
-if(@ARGV==0 || grep(/--help/,@ARGV)){
+if ( @ARGV == 0 || grep( /--help/, @ARGV ) ) {
     &printhelp;
 }
 
-my ($infolder, $outfolder, $dbname, $dsname, $threads);
-my %action=();
-my $serverurl="https://neurojson.io:7777";
+my ( $infolder, $outfolder, $dbname, $dsname, $threads );
+my %action    = ();
+my $serverurl = "https://neurojson.io:7777";
 
-$threads=4;
+$threads = 4;
 
-while(my $opt = $ARGV[0]) {
-    if($opt =~ /^-[-a-zA-Z]/){
-        if($opt eq '-i' || $opt eq '--input'){
-                shift;
-                $infolder=shift;
-                $infolder=~s/\/$//g;
-        }elsif($opt eq '-o' || $opt eq '--output'){
-                shift;
-                $outfolder=shift;
-                $outfolder=~s/\/$//g;
-        }elsif($opt eq '-db' || $opt eq '--database'){
-                shift;
-                $dbname=shift;
-        }elsif($opt eq '-ds' || $opt eq '--dataset'){
-                shift;
-                $dsname=shift;
-        }elsif($opt eq '-c' || $opt eq '--couchdb'){
-                shift;
-                $serverurl=shift;
-        }elsif($opt eq '-t' || $opt eq '--threads'){
-                shift;
-                $threads=shift;
-        }elsif($opt eq '-l' || $opt eq '--list'){
-                shift;
-                $action{"list"}=1;
-        }elsif($opt eq '-q' || $opt eq '--info'){
-                shift;
-                $action{"info"}=1;
-        }elsif($opt eq '-j' || $opt eq '--tojson'){
-                shift;
-                $action{"tojson"}=1;
-        }elsif($opt eq '-f' || $opt eq '--find'){
-                shift;
-                $action{"find"}=shift;
-        }elsif($opt eq '-d' || $opt eq '--download'){
-                shift;
-                $action{"download"}=1;
-        }elsif($opt eq '-r' || $opt eq '--convert'){
-                shift;
-                $action{"convert"}=1;
+while ( my $opt = $ARGV[0] ) {
+    if ( $opt =~ /^-[-a-zA-Z]/ ) {
+        if ( $opt eq '-i' || $opt eq '--input' ) {
+            shift;
+            $infolder = shift;
+            $infolder =~ s/\/$//g;
+        } elsif ( $opt eq '-o' || $opt eq '--output' ) {
+            shift;
+            $outfolder = shift;
+            $outfolder =~ s/\/$//g;
+        } elsif ( $opt eq '-db' || $opt eq '--database' ) {
+            shift;
+            $dbname = shift;
+        } elsif ( $opt eq '-ds' || $opt eq '--dataset' ) {
+            shift;
+            $dsname = shift;
+        } elsif ( $opt eq '-c' || $opt eq '--couchdb' ) {
+            shift;
+            $serverurl = shift;
+        } elsif ( $opt eq '-t' || $opt eq '--threads' ) {
+            shift;
+            $threads = shift;
+        } elsif ( $opt eq '-l' || $opt eq '--list' ) {
+            shift;
+            $action{"list"} = 1;
+        } elsif ( $opt eq '-q' || $opt eq '--info' ) {
+            shift;
+            $action{"info"} = 1;
+        } elsif ( $opt eq '-j' || $opt eq '--tojson' ) {
+            shift;
+            $action{"tojson"} = 1;
+        } elsif ( $opt eq '-f' || $opt eq '--find' ) {
+            shift;
+            $action{"find"} = shift;
+        } elsif ( $opt eq '-d' || $opt eq '--download' ) {
+            shift;
+            $action{"download"} = 1;
+        } elsif ( $opt eq '-r' || $opt eq '--convert' ) {
+            shift;
+            $action{"convert"} = 1;
         }
     }
 }
 
-if($infolder ne '' && $outfolder ne '') {
-    convert($infolder, $outfolder, $dbname, $dsname, $action{"convert"});
+if ( $infolder ne '' && $outfolder ne '' ) {
+    convert( $infolder, $outfolder, $dbname, $dsname, $action{"convert"} );
 }
 
-if(exists($action{"info"})) {
-    my $url =($dbname ne '') ? (($dsname ne '') ? "$serverurl/$dbname/$dsname" : "$serverurl/$dbname") : "$serverurl/_dbs_info";
+if ( exists( $action{"info"} ) ) {
+    my $url =
+        ( $dbname ne '' )
+      ? ( ( $dsname ne '' ) ? "$serverurl/$dbname/$dsname" : "$serverurl/$dbname" )
+      : "$serverurl/_dbs_info";
 
-    my $content='';
-    if($dsname ne '') {
-        $content=`curl -s --head "$url"`;
-        my @lines=grep {! /^\s*$/} split("\n", $content);
-        $content="{\n";
-        for(my $i=0; $i<=$#lines; $i++) {
-            if($lines[$i] =~ /^([^:]+)\s*:\s*([^\r\n]+)/) {
-                my ($headkey, $headval)=($1, $2);
-                $headval="\"$2\"" if $headval !~ /^"|^\d+$/;
-                $content .= "\t\"$headkey\" : $headval".(($i==$#lines) ? "\n" : ",\n");
+    my $content = '';
+    if ( $dsname ne '' ) {
+        $content = `curl -s --head "$url"`;
+        my @lines = grep { !/^\s*$/ } split( "\n", $content );
+        $content = "{\n";
+        for ( my $i = 0 ; $i <= $#lines ; $i++ ) {
+            if ( $lines[$i] =~ /^([^:]+)\s*:\s*([^\r\n]+)/ ) {
+                my ( $headkey, $headval ) = ( $1, $2 );
+                $headval = "\"$2\"" if $headval !~ /^"|^\d+$/;
+                $content .= "\t\"$headkey\" : $headval" . ( ( $i == $#lines ) ? "\n" : ",\n" );
             }
         }
-        $content .="}\n";
+        $content .= "}\n";
     } else {
-        $content=webget($url);
+        $content = webget($url);
     }
-    if($content ne ''){
-          print $content;
-    }
-}
-
-if(exists($action{"list"})) {
-    my $url =($dbname ne '') ? "$serverurl/$dbname/_all_docs" : "$serverurl/_dbs_info";
-
-    my $content=webget($url);
-    if($content ne ''){
-          print $content;
+    if ( $content ne '' ) {
+        print $content;
     }
 }
 
-if(exists($action{"download"}) && $dbname ne '') {
-    my $url=($dsname ne '') ? "$serverurl/$dbname/$dsname" : "$serverurl/$dbname/";
-    my $content=webget($url);
+if ( exists( $action{"list"} ) ) {
+    my $url = ( $dbname ne '' ) ? "$serverurl/$dbname/_all_docs" : "$serverurl/_dbs_info";
 
-    if($content ne ''){
-          print $content;
+    my $content = webget($url);
+    if ( $content ne '' ) {
+        print $content;
     }
 }
 
-if(exists($action{"find"}) && $dbname ne '') {
-    my $url ="$serverurl/$dbname/_find";
-    my $content=webpost($url, $action{'find'});
-    if($content ne ''){
-          print $content;
+if ( exists( $action{"download"} ) && $dbname ne '' ) {
+    my $url = ( $dsname ne '' ) ? "$serverurl/$dbname/$dsname" : "$serverurl/$dbname/";
+    my $content = webget($url);
+
+    if ( $content ne '' ) {
+        print $content;
+    }
+}
+
+if ( exists( $action{"find"} ) && $dbname ne '' ) {
+    my $url = "$serverurl/$dbname/_find";
+    my $content = webpost( $url, $action{'find'} );
+    if ( $content ne '' ) {
+        print $content;
     }
 }
 
 sub webget {
-    my ($url)=@_;
+    my ($url) = @_;
 
-    my $content=`curl -s -X GET "$url"`;
-    if($content eq ''){
-           eval("use LWP::UserAgent (); 1")  or warn "LWP::UserAgent is not available: $@";;
-           my $ua      = LWP::UserAgent->new();
-           my $response = $ua->get($url);
-           $content = $response->decoded_content;
-     }
-     return $content;
+    my $content = `curl -s -X GET "$url"`;
+    if ( $content eq '' ) {
+        eval("use LWP::UserAgent (); 1") or warn "LWP::UserAgent is not available: $@";
+        my $ua       = LWP::UserAgent->new();
+        my $response = $ua->get($url);
+        $content = $response->decoded_content;
+    }
+    return $content;
 }
 
 sub webpost {
-    my ($url, $formjson)=@_;
+    my ( $url, $formjson ) = @_;
 
-    my $content=`curl -s --header 'Content-Type: application/json' -X POST -d '$formjson' '$url'`;
-    if($content eq ''){
-           eval("use LWP::UserAgent (); 1")  or warn "LWP::UserAgent is not available: $@";;
-           my $ua      = LWP::UserAgent->new();
-           my $json = JSON::PP->new;
-           my %form=$json->encode($formjson);
-           my $response = $ua->post($url, \%form);
-           $content = $response->decoded_content;
-     }
-     return $content;
+    my $content = `curl -s --header 'Content-Type: application/json' -X POST -d '$formjson' '$url'`;
+    if ( $content eq '' ) {
+        eval("use LWP::UserAgent (); 1") or warn "LWP::UserAgent is not available: $@";
+        my $ua       = LWP::UserAgent->new();
+        my $json     = JSON::PP->new;
+        my %form     = $json->encode($formjson);
+        my $response = $ua->post( $url, \%form );
+        $content = $response->decoded_content;
+    }
+    return $content;
 }
 
 sub convert {
-    my ($inputroot, $outputroot, $dbname, $dsname, $doconvert)=@_;
-    my $hasparallel=1;
+    my ( $inputroot, $outputroot, $dbname, $dsname, $doconvert ) = @_;
+    my $hasparallel = 1;
     my $manager;
-    my @datasets=();
-    if($dsname ne '') {
-        find({ wanted => sub { push(@datasets, $_) if $_ !~ /\/\.[^\/]+$/ }, no_chdir => 1}, "$inputroot/$dsname");
+    my @datasets = ();
+    if ( $dsname ne '' ) {
+        find( { wanted => sub { push( @datasets, $_ ) if $_ !~ /\/\.[^\/]+$/ }, no_chdir => 1 }, "$inputroot/$dsname" );
     } else {
-        @datasets=glob("$inputroot/*/");
+        @datasets = glob("$inputroot/*/");
     }
 
-    my @args=($inputroot, $outputroot);
-    if($dbname ne '') {
-        push(@args, $dbname);
+    my @args = ( $inputroot, $outputroot );
+    if ( $dbname ne '' ) {
+        push( @args, $dbname );
     } else {
-        if($inputroot =~ /([^\/]+)\/*$/) {
-            push(@args, $1);
+        if ( $inputroot =~ /([^\/]+)\/*$/ ) {
+            push( @args, $1 );
         } else {
-            push(@args, "");
+            push( @args, "" );
         }
     }
-    push(@args, $dsname);
-    push(@args, "") if($dbname ne ''); # args[4] sets file name
+    push( @args, $dsname );
+    push( @args, "" ) if ( $dbname ne '' );    # args[4] sets file name
 
     # dynamically test if parallel::forkmanager module is available, if not, fall back to serial
-    eval("use Parallel::ForkManager; 1")  or do {
-       warn "Parallel::ForkManager is not available: $@";
-       $hasparallel=0;
+    eval("use Parallel::ForkManager; 1") or do {
+        warn "Parallel::ForkManager is not available: $@";
+        $hasparallel = 0;
     };
 
-    $manager = Parallel::ForkManager->new($threads) if($hasparallel);
+    $manager = Parallel::ForkManager->new($threads) if ($hasparallel);
 
     foreach my $ds (@datasets) {
-        if($hasparallel) {
+        if ($hasparallel) {
             $manager->start and next;
         }
-        if($dsname ne '') {
-            $args[4]=$ds;
-        } elsif ($ds =~ /([^\/]+)\/*$/) {
-            $args[3]=$1;
+        if ( $dsname ne '' ) {
+            $args[4] = $ds;
+        } elsif ( $ds =~ /([^\/]+)\/*$/ ) {
+            $args[3] = $1;
         }
-        if ($doconvert==1) {
-            system("njprep",@args);
+        if ( $doconvert == 1 ) {
+            system( "njprep", @args );
         } else {
-            print "njprep\t".join("\t", @args)."\n"; # preview of the commands
+            print "njprep\t" . join( "\t", @args ) . "\n";    # preview of the commands
         }
         $manager->finish if $hasparallel;
     }
     $manager->wait_all_children if $hasparallel;
 
-    if($doconvert==1 && $dsname ne '') {
-        system("mergejson", "$outputroot/${dsname}");   # merge subject-folder json files to a single .jbids file
+    if ( $doconvert == 1 && $dsname ne '' ) {
+        system( "mergejson", "$outputroot/${dsname}" );       # merge subject-folder json files to a single .jbids file
     }
 }
 
-sub printhelp{
-    printf("Format: %s <param1> <param2> ...
+sub printhelp {
+    printf(
+        "Format: %s <param1> <param2> ...
 
 Suported flags include
 
@@ -281,9 +285,10 @@ Suported flags include
   -q/--info               query database info if -db is given; or dataset info if both -db/-ds are given
   -f/--find '{\"selector\":,...}' use the CouchDB _find API to search dataset
   -d/--download           retrieve and display JSON encoded dataset, or complete database (slow)
-",  $0);
+", $0
+    );
     exit 0;
 }
-      
+
 exit(0);
 1

@@ -7,52 +7,52 @@ use JSON::XS;
 use Tie::IxHash;
 use Scalar::Util qw(looks_like_number);
 
-my (@header, @val, $ispretty, $file);
-my %data=();
+my ( @header, @val, $ispretty, $file );
+my %data = ();
 
 tie %data, 'Tie::IxHash';
 
-$ispretty=1;
+$ispretty = 1;
 
-if(@ARGV<1) {
-  print "format: tsv2json tsvfile.tsv <output.json>\n";
-  exit;
+if ( @ARGV < 1 ) {
+    print "format: tsv2json tsvfile.tsv <output.json>\n";
+    exit;
 }
 
-open($file, "<", $ARGV[0]) or die "File '$ARGV[0]' can't be opened"; 
-my $delim="\t";
+open( $file, "<", $ARGV[0] ) or die "File '$ARGV[0]' can't be opened";
+my $delim = "\t";
 
-$delim=',' if($ARGV[0] =~ /\.csv$/i);
+$delim = ',' if ( $ARGV[0] =~ /\.csv$/i );
 
-while( my $line = <$file>) {
-  if(!@header) {
-    $delim=($delim eq "\t" ? ',' : "\t") if($line !~ /$delim/);  # auto-detect if column is \t or , separated
-    @header=csvsplit($line, $delim);
-  } else {
-    @val=csvsplit($line, $delim);
-    for(my $i=0; $i<=$#header; $i++) {
-      if($i <= $#val) {
-         push(@{$data{$header[$i]}}, $val[$i]);
-      }
+while ( my $line = <$file> ) {
+    if ( !@header ) {
+        $delim = ( $delim eq "\t" ? ',' : "\t" ) if ( $line !~ /$delim/ );  # auto-detect if column is \t or , separated
+        @header = csvsplit( $line, $delim );
+    } else {
+        @val = csvsplit( $line, $delim );
+        for ( my $i = 0 ; $i <= $#header ; $i++ ) {
+            if ( $i <= $#val ) {
+                push( @{ $data{ $header[$i] } }, $val[$i] );
+            }
+        }
     }
-  }
 }
 
-if(@header) {
-   my $json = JSON::XS->new;
-   $json = $json->pretty($ispretty);
-   if(@ARGV<2) {
-     print $json->encode(\%data);
-   } else {
-     open($file, ">", $ARGV[1])  or die "File '$ARGV[1]' can't be opened";
-     print $file $json->encode(\%data);
-     close($file);
-   }
+if (@header) {
+    my $json = JSON::XS->new;
+    $json = $json->pretty($ispretty);
+    if ( @ARGV < 2 ) {
+        print $json->encode( \%data );
+    } else {
+        open( $file, ">", $ARGV[1] ) or die "File '$ARGV[1]' can't be opened";
+        print $file $json->encode( \%data );
+        close($file);
+    }
 }
 
 sub csvsplit {
     my $line = shift;
-    my $sep = (shift or ',');
+    my $sep = ( shift or ',' );
 
     return () unless $line;
 
@@ -60,9 +60,9 @@ sub csvsplit {
     $line =~ s/\r?\n$//;
 
     my $re = qr/(?:^|$sep)(?:"([^"]*)"|([^$sep]*))/;
-    while($line =~ /$re/g) {
+    while ( $line =~ /$re/g ) {
         my $value = defined $1 ? $1 : $2;
-        push @cells, (defined $value ? (looks_like_number($value) ? $value+0 : $value) : '');
+        push @cells, ( defined $value ? ( looks_like_number($value) ? $value + 0 : $value ) : '' );
     }
     return @cells;
 }
