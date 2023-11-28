@@ -5,7 +5,7 @@
 set -u #Treat unset variables as an error when substituting.
 
 if [[ $# -lt 3 ]] ; then
-  echo "format: folder2json /input/root/folder /output/root/folder database_name <dataset_name>"
+  echo "format: njprep /input/root/folder /output/root/folder database_name <dataset_name>"
   exit
 fi
 
@@ -20,11 +20,11 @@ fi
 #===============================================================================
 
 main() {
-  if [[ $# -ge 4 ]]; then # convert a single dataset
+  if [[ $# -ge 5 ]]; then
+    convert_file "$1" "$2" "$4" "$5"
+  elif [[ $# -ge 4 ]]; then # convert a single dataset
     convert_dataset "$1" "$2" "$4"
     [[ -d "$2/$4" ]] && bids2json "$2" "$4"
-  elif [[ -f "$1" ]]; then
-    convert_file $(dirname "$1") "$2" "$4" "$1"
   else
     convert_database "$@"
   fi

@@ -4,7 +4,7 @@
 # NeuroJSON client (neuroj)
 #
 # Author:  Qianqian Fang <q.fang at neu.edu>
-# License: GPLv3
+# License: BSD-3-clause
 # Version: 0.5
 # Github:  https://github.com/NeuroJSON/neuroj
 #
@@ -26,8 +26,43 @@
 # How to use:
 #    type "neuroj --help" to see the format
 #
+# Examples:
+#   # print help information and flags
+#   neuroj
+#
+#   # preview commands (dry-run, does not execute) to convert a database (including all included datasets) to JSON
+#   neuroj -i /path/to/database/rootfolder -o /path/to/output/json/folder -db openneuro
+#
+#   # convert a database (a collection of datasets) to JSON in batch with 12 parallel threads (1 thread per dataset)
+#   neuroj -i /path/to/database/rootfolder -o /path/to/output/json/folder -db openneuro --convert -t 12
+#
+#   # convert a single dataset (including all files under sub-folders) to JSON in parallel (1 thread per file)
+#   neuroj -i /path/to/database/rootfolder -o /path/to/output/json/folder -db openneuro -ds ds000001 --convert
+#
+#   # convert a database to JSON, assuming the last segment of the input path as database name
+#   neuroj -i /path/to/database/databasename -o /path/to/output/json/folder
+#
+#   # convert a single dataset ds000001 to JSON (dry-run only, add --convert to run)
+#   neuroj -i /path/to/database/databasename -o /path/to/output/json/folder -ds ds000001
+#
+#   # list all databases currently hosted on NeuroJSON.io
+#   neuroj --list
+#
+#   # list all databases currently hosted on NeuroJSON.io
+#   neuroj --list -db openneuro
+#
+#   # list all databases currently hosted on NeuroJSON.io
+#   neuroj --list -db openneuro
+#
+#   # list the ID of the first 10 datasets in the openneuro database starting from the 3rd datasets
+#   neuroj -db openneuro --find '{"selector":{},"fields":["_id"],"limit":10,"skip":2}'
+#
+#   # list the ID of the first 10 datasets in the openneuro database starting from the 3rd datasets
+#   neuroj -db openneuro --find '{"selector":{},"fields":["_id","bids_dataset_info.dataset_description\\.json"],"limit":2}' | jq '.'
+#
 ###############################################################################
 
+use File::Find;
 use strict;
 use warnings;
 no warnings 'uninitialized';
@@ -65,22 +100,43 @@ while(my $opt = $ARGV[0]) {
                 shift;
                 $threads=shift;
         }elsif($opt eq '-l' || $opt eq '--list'){
+                shift;
                 $action{"list"}=1;
+        }elsif($opt eq '-q' || $opt eq '--info'){
+                shift;
+                $action{"info"}=1;
         }elsif($opt eq '-j' || $opt eq '--tojson'){
+                shift;
                 $action{"tojson"}=1;
         }elsif($opt eq '-f' || $opt eq '--find'){
+                shift;
                 $action{"find"}=shift;
         }elsif($opt eq '-d' || $opt eq '--download'){
+                shift;
                 $action{"download"}=1;
+        }elsif($opt eq '-r' || $opt eq '--convert'){
+                shift;
+                $action{"convert"}=1;
         }
-        last;
     }
-    shift;
 }
 
 if($infolder ne '' && $outfolder ne '') {
-print "here\n";
-    convert($infolder, $outfolder, $dbname, $dsname);
+    convert($infolder, $outfolder, $dbname, $dsname, $action{"convert"});
+}
+
+if(exists($action{"info"})) {
+    my $url =($dbname ne '') ? (($dsname ne '') ? "$serverurl/$dbname/$dsname" : "$serverurl/$dbname") : "$serverurl/_dbs_info";
+
+    my $content='';
+    if($dsname ne '') {
+        $content=`curl -s --head "$url"`;
+    } else {
+        $content=webget($url);
+    }
+    if($content ne ''){
+          print $content;
+    }
 }
 
 if(exists($action{"list"})) {
@@ -138,27 +194,58 @@ sub webpost {
 }
 
 sub convert {
-    my ($inputroot, $outputroot, $dbname, $dsname)=@_;
-    my @datasets = glob("$inputroot/*/");
-print "$inputroot\n";
-print join("\n",@datasets);
-return;
+    my ($inputroot, $outputroot, $dbname, $dsname, $doconvert)=@_;
+    my $hasparallel=1;
+    my $manager;
+    my @datasets=();
+    if($dsname ne '') {
+        find({ wanted => sub { push(@datasets, $_) if $_ !~ /\/\.[^\/]+$/ }, no_chdir => 1}, "$inputroot/$dsname");
+    } else {
+        @datasets=glob("$inputroot/*/");
+    }
+
     my @args=($inputroot, $outputroot);
     if($dbname ne '') {
         push(@args, $dbname);
-        push(@args, $dsname) if($dsname ne '');
+    } else {
+        if($inputroot =~ /([^\/]+)\/*$/) {
+            push(@args, $1);
+        } else {
+            push(@args, "");
+        }
     }
-    print join('\t', @args);
+    push(@args, $dsname);
+    push(@args, "") if($dbname ne ''); # args[4] sets file name
 
-    eval("use Parallel::ForkManager; 1")  or warn "Parallel::ForkManager is not available: $@";;
-    my $manager = Parallel::ForkManager->new($threads);
+    # dynamically test if parallel::forkmanager module is available, if not, fall back to serial
+    eval("use Parallel::ForkManager; 1")  or do {
+       warn "Parallel::ForkManager is not available: $@";
+       $hasparallel=0;
+    };
+
+    $manager = Parallel::ForkManager->new($threads) if($hasparallel);
 
     foreach my $ds (@datasets) {
-        $manager->start and next;
-        system("folder2json",@args);
-        $manager->finish;
+        if($hasparallel) {
+            $manager->start and next;
+        }
+        if($dsname ne '') {
+            $args[4]=$ds;
+        } elsif ($ds =~ /([^\/]+)\/*$/) {
+            $args[3]=$1;
+        }
+        if ($doconvert==1) {
+            system("njprep",@args);
+        } else {
+            print "njprep\t".join("\t", @args)."\n"; # preview of the commands
+        }
+        $manager->finish if $hasparallel;
     }
-    $manager->wait_all_children;
+    $manager->wait_all_children if $hasparallel;
+
+    if($doconvert==1 && $dsname ne '') {
+        system("mergejson", "$outputroot/${dsname}");   # merge subject-folder json files to a single .jbids file
+    }
 }
 
 sub printhelp{
@@ -170,9 +257,11 @@ Suported flags include
   -o/--output folderpath  path to the output folder storing the converted JSON files
   -db/--database dbname   database name (such as openneuro, openfnirs, dandi etc)
   -ds/--dataset dataset   dataset name (a single dataset in a collection, such as ds00001)
+  -r/--convert            convert database (-db) or dataset (-db .. -ds ..) (in parallel) to JSON
   -t/--threads num        set the thread number for parallel conversion (4 by default)
   -c/--couchdb url        set the CouchDB REST API root url, use https://neurojson.io:7777 by default
-  -l/--list               list all datasets if -db is given; or the document if both -db/-ds are given
+  -l/--list               list all database if -db is given; or the dataset if both -db/-ds are given
+  -q/--info               query database info if -db is given; or dataset info if both -db/-ds are given
   -f/--find '{\"selector\":,...}' use the CouchDB _find API to search dataset
   -d/--download           retrieve and display JSON encoded dataset, or complete database (slow)
 ",  $0);
