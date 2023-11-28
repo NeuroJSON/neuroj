@@ -48,16 +48,16 @@
 #   # list all databases currently hosted on NeuroJSON.io
 #   neuroj --list
 #
-#   # list all databases currently hosted on NeuroJSON.io
+#   # list all datasets strored under the "openneuro" database
 #   neuroj --list -db openneuro
 #
-#   # list all databases currently hosted on NeuroJSON.io
-#   neuroj --list -db openneuro
+#   # query server-level information of the database openneuro (return dataset count, file sizes etc)
+#   neuroj --info -db openneuro
 #
-#   # list the ID of the first 10 datasets in the openneuro database starting from the 3rd datasets
+#   # search the IDs of the first 10 (limit:10) datasets in the openneuro database starting from the 3rd (skip:2) datasets
 #   neuroj -db openneuro --find '{"selector":{},"fields":["_id"],"limit":10,"skip":2}'
 #
-#   # list the ID of the first 10 datasets in the openneuro database starting from the 3rd datasets
+#   # query the dataset name "_id" and "dataset_description.json" records of the first two datasets in "openneuro" and format with jq
 #   neuroj -db openneuro --find '{"selector":{},"fields":["_id","bids_dataset_info.dataset_description\\.json"],"limit":2}' | jq '.'
 #
 ###############################################################################
