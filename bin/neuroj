@@ -23,6 +23,10 @@
 # Specifically, this script requires Perl 5.x and curl (if curl is not install 
 # in the path, it looks for the LWP::UserAgent perl modules).
 #
+# When using --convert, conversion for some of the data files, such as .snirf or
+# .nii/.nii.gz requires octave and the jbids toolbox (including its submodules).
+# Other functionalities does not require octave.
+#
 # How to use:
 #    type "neuroj --help" to see the format
 #
@@ -50,6 +54,9 @@
 #
 #   # list all datasets strored under the "openneuro" database
 #   neuroj --list -db openneuro
+#
+#   # list all datasets strored under the "openneuro" database and print all datasets using jq filters
+#   neuroj --list -db openneuro | jq '.rows[] | .id'
 #
 #   # query server-level information of the database openneuro (return dataset count, file sizes etc)
 #   neuroj --info -db openneuro
@@ -131,6 +138,16 @@ if(exists($action{"info"})) {
     my $content='';
     if($dsname ne '') {
         $content=`curl -s --head "$url"`;
+        my @lines=grep {! /^\s*$/} split("\n", $content);
+        $content="{\n";
+        for(my $i=0; $i<=$#lines; $i++) {
+            if($lines[$i] =~ /^([^:]+)\s*:\s*([^\r\n]+)/) {
+                my ($headkey, $headval)=($1, $2);
+                $headval="\"$2\"" if $headval !~ /^"|^\d+$/;
+                $content .= "\t\"$headkey\" : $headval".(($i==$#lines) ? "\n" : ",\n");
+            }
+        }
+        $content .="}\n";
     } else {
         $content=webget($url);
     }
