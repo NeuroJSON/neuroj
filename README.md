@@ -24,7 +24,7 @@ The NeuroJSON project (https://neurojson.org), funded by the US National Institu
 is aimed at promoting and curating scalable, searchable, and reusable neuroimaging datasets among
 the communities. The NeuroJSON project adopts [JSON](https://www.json.org/json-en.html) and
 [binary JSON](https://json.nlohmann.me/features/binary_formats/) formats as the primary underlying
-data formats to reenforce searchbility and scalability. JSON is an internationally standardized
+data formats to reinforce searchbility and scalability. JSON is an internationally standardized
 format that is universally supported across wide range of programming environments. JSON has a
 vast toolchain ecosystem that can be readily applied for processing neuroimaging data once
 converted. Specifically, modern document-store and NoSQL databases, such as
@@ -49,7 +49,7 @@ based data dissemination not only greatly enhances the scalability of neuroimagi
 but also make datasets findable, searchable, and easy to integrate with diverse
 data analysis tools. This also prepares the community towards building complex data
 analysis pipelines that requires interoperable data-exchange between complex software
-tools running on the cloud or web-baesd applications.
+tools running on the cloud or web-based applications.
 
 
 `njprep`
