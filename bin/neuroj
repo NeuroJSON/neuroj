@@ -30,43 +30,6 @@
 # How to use:
 #    type "neuroj --help" to see the format
 #
-# Examples:
-#   # print help information and flags
-#   neuroj
-#
-#   # preview commands (dry-run, does not execute) to convert a database (including all included datasets) to JSON
-#   neuroj -i /path/to/database/rootfolder -o /path/to/output/json/folder -db openneuro
-#
-#   # convert a database (a collection of datasets) to JSON in batch with 12 parallel threads (1 thread per dataset)
-#   neuroj -i /path/to/database/rootfolder -o /path/to/output/json/folder -db openneuro --convert -t 12
-#
-#   # convert a single dataset (including all files under sub-folders) to JSON in parallel (1 thread per file)
-#   neuroj -i /path/to/database/rootfolder -o /path/to/output/json/folder -db openneuro -ds ds000001 --convert
-#
-#   # convert a database to JSON, assuming the last segment of the input path as database name
-#   neuroj -i /path/to/database/databasename -o /path/to/output/json/folder
-#
-#   # convert a single dataset ds000001 to JSON (dry-run only, add --convert to run)
-#   neuroj -i /path/to/database/databasename -o /path/to/output/json/folder -ds ds000001
-#
-#   # list all databases currently hosted on NeuroJSON.io
-#   neuroj --list
-#
-#   # list all datasets strored under the "openneuro" database
-#   neuroj --list -db openneuro
-#
-#   # list all datasets strored under the "openneuro" database and print all datasets using jq filters
-#   neuroj --list -db openneuro | jq '.rows[] | .id'
-#
-#   # query server-level information of the database openneuro (return dataset count, file sizes etc)
-#   neuroj --info -db openneuro
-#
-#   # search the IDs of the first 10 (limit:10) datasets in the openneuro database starting from the 3rd (skip:2) datasets
-#   neuroj -db openneuro --find '{"selector":{},"fields":["_id"],"limit":10,"skip":2}'
-#
-#   # query the dataset name "_id" and "dataset_description.json" records of the first two datasets in "openneuro" and format with jq
-#   neuroj -db openneuro --find '{"selector":{},"fields":["_id","bids_dataset_info.dataset_description\\.json"],"limit":2}' | jq '.'
-#
 ###############################################################################
 
 use File::Find;
@@ -74,17 +37,18 @@ use strict;
 use warnings;
 no warnings 'uninitialized';
 
-if ( @ARGV == 0 || grep( /--help/, @ARGV ) ) {
+if ( @ARGV == 0 || grep( /^--help$/, @ARGV ) || grep( /^-h$/, @ARGV ) ) {
     &printhelp;
 }
 
-my ( $infolder, $outfolder, $dbname, $dsname, $threads );
-my %action    = ();
-my $serverurl = "https://neurojson.io:7777";
+my ( $infolder, $outfolder, $dbname, $dsname, $threads, $dbuser, $dbpass );
+my %action = ();
+my $serverurl = ( exists $ENV{"NEUROJSON_IO"} ) ? $ENV{"NEUROJSON_IO"} : "https://neurojson.io:7777";
 
 $threads = 4;
 
 while ( my $opt = $ARGV[0] ) {
+    last if $opt eq '';
     if ( $opt =~ /^-[-a-zA-Z]/ ) {
         if ( $opt eq '-i' || $opt eq '--input' ) {
             shift;
@@ -100,36 +64,72 @@ while ( my $opt = $ARGV[0] ) {
         } elsif ( $opt eq '-ds' || $opt eq '--dataset' ) {
             shift;
             $dsname = shift;
-        } elsif ( $opt eq '-c' || $opt eq '--couchdb' ) {
+        } elsif ( $opt eq '-u' || $opt eq '--url' ) {
             shift;
             $serverurl = shift;
+        } elsif ( $opt eq '-n' || $opt eq '--netrc-file' ) {
+            shift;
+            if ( $opt eq '-n' ) {
+                $action{"netrc"} = '-n';
+            } else {
+                $action{"netrc"} = '--netrc-file "' . shift . '"';
+            }
+        } elsif ( $opt eq '-U' || $opt eq '--user' ) {
+            shift;
+            $dbuser = shift;
+        } elsif ( $opt eq '-P' || $opt eq '--pass' || $opt eq '--password' ) {
+            shift;
+            $dbpass = shift;
         } elsif ( $opt eq '-t' || $opt eq '--threads' ) {
             shift;
             $threads = shift;
         } elsif ( $opt eq '-l' || $opt eq '--list' ) {
             shift;
             $action{"list"} = 1;
+        } elsif ( $opt eq '-c' || $opt eq '--create' ) {
+            shift;
+            $action{"create"} = 1;
         } elsif ( $opt eq '-q' || $opt eq '--info' ) {
             shift;
             $action{"info"} = 1;
-        } elsif ( $opt eq '-j' || $opt eq '--tojson' ) {
+        } elsif ( $opt eq '-d' || $opt eq '--delete' ) {
             shift;
-            $action{"tojson"} = 1;
+            $action{"delete"} = 1;
         } elsif ( $opt eq '-f' || $opt eq '--find' ) {
             shift;
             $action{"find"} = shift;
-        } elsif ( $opt eq '-d' || $opt eq '--download' ) {
+        } elsif ( $opt eq '-v' || $opt eq '--rev' ) {
             shift;
-            $action{"download"} = 1;
+            $action{"rev"} = shift;
+        } elsif ( $opt eq '-g' || $opt eq '--get' || $opt eq '--pull' ) {
+            shift;
+            $action{"pull"} = 1;
+        } elsif ( $opt eq '-p' || $opt eq '--put' || $opt eq '--push' ) {
+            shift;
+            $action{"push"} = shift;
         } elsif ( $opt eq '-r' || $opt eq '--convert' ) {
             shift;
             $action{"convert"} = 1;
+        } else {
+            print("option not supported: $opt\n");
+            shift;
         }
+    } else {
+        print("option not supported: $opt\n");
+        shift;
     }
 }
 
 if ( $infolder ne '' && $outfolder ne '' ) {
     convert( $infolder, $outfolder, $dbname, $dsname, $action{"convert"} );
+}
+
+if ( exists( $action{"create"} ) && $dbname ne '' ) {
+    my $url     = "$serverurl/$dbname";
+    my $content = webput($url);
+    if ( $content ne '' ) {
+        print $content;
+    }
 }
 
 if ( exists( $action{"info"} ) ) {
@@ -140,7 +140,7 @@ if ( exists( $action{"info"} ) ) {
 
     my $content = '';
     if ( $dsname ne '' ) {
-        $content = `curl -s --head "$url"`;
+        $content = webhead("$url");
         my @lines = grep { !/^\s*$/ } split( "\n", $content );
         $content = "{\n";
         for ( my $i = 0 ; $i <= $#lines ; $i++ ) {
@@ -160,18 +160,20 @@ if ( exists( $action{"info"} ) ) {
 }
 
 if ( exists( $action{"list"} ) ) {
-    my $url = ( $dbname ne '' ) ? "$serverurl/$dbname/_all_docs" : "$serverurl/_dbs_info";
-
+    my $url =
+        ( $dbname ne '' )
+      ? ( ( $dsname ne '' ) ? "$serverurl/$dbname/$dsname?revs=true" : "$serverurl/$dbname/_all_docs" )
+      : "$serverurl/_dbs_info";
     my $content = webget($url);
     if ( $content ne '' ) {
         print $content;
     }
 }
 
-if ( exists( $action{"download"} ) && $dbname ne '' ) {
-    my $url = ( $dsname ne '' ) ? "$serverurl/$dbname/$dsname" : "$serverurl/$dbname/";
+if ( exists( $action{"pull"} ) && $dbname ne '' && $dsname ne '' ) {
+    my $url =
+      ( $action{"rev"} ne '' ) ? ( "$serverurl/$dbname/$dsname?rev=" . $action{"rev"} ) : "$serverurl/$dbname/$dsname";
     my $content = webget($url);
-
     if ( $content ne '' ) {
         print $content;
     }
@@ -185,26 +187,69 @@ if ( exists( $action{"find"} ) && $dbname ne '' ) {
     }
 }
 
-sub webget {
-    my ($url) = @_;
+if (   exists( $action{"delete"} )
+    && $dbname ne ''
+    && $dsname ne ''
+    && exists( $action{"rev"} )
+    && $action{"rev"} =~ /^\d+-/ )
+{
+    my $url     = "$serverurl/$dbname/$dsname?rev=" . $action{"rev"};
+    my $content = webdelete($url);
+    if ( $content ne '' ) {
+        print $content;
+    }
+}
 
-    my $content = `curl -s -X GET "$url"`;
+sub webget {
+    my ( $url, $mode ) = @_;
+
+    $mode = '-X GET' if ( $mode eq '' );
+
+    #print "curl -s $mode $action{netrc} $url \n";
+    my $content = `curl -s $mode $action{netrc} "$url"`;
     if ( $content eq '' ) {
         eval("use LWP::UserAgent (); 1") or warn "LWP::UserAgent is not available: $@";
-        my $ua       = LWP::UserAgent->new();
-        my $response = $ua->get($url);
+        my $ua = LWP::UserAgent->new();
+        my $response;
+        if ( $mode =~ /GET$/i ) {
+            $response = $ua->get($url);
+        } elsif ( $mode =~ /PUT$/i ) {
+            $response = $ua->put($url);
+        } elsif ( $mode =~ /DELETE$/i ) {
+            $response = $ua->delete($url);
+        } elsif ( $mode =~ /HEAD$/i ) {
+            $response = $ua->head($url);
+        }
         $content = $response->decoded_content;
     }
     return $content;
 }
 
-sub webpost {
-    my ( $url, $formjson ) = @_;
+sub webput {
+    my ($url) = @_;
+    return webget( $url, "-X PUT" );
+}
 
-    my $content = `curl -s --header 'Content-Type: application/json' -X POST -d '$formjson' '$url'`;
+sub webdelete {
+    my ($url) = @_;
+    return webget( $url, "-X DELETE" );
+}
+
+sub webhead {
+    my ($url) = @_;
+    return webget( $url, "--head" );
+}
+
+sub webpost {
+    my ( $url, $formjson, $dbuser, $dbpass ) = @_;
+
+    my $content = `curl -s $action{"netrc"} --header 'Content-Type: application/json' -X POST -d '$formjson' '$url'`;
     if ( $content eq '' ) {
         eval("use LWP::UserAgent (); 1") or warn "LWP::UserAgent is not available: $@";
-        my $ua       = LWP::UserAgent->new();
+        my $ua = LWP::UserAgent->new();
+        if ( $dbuser ne '' && $dbpass ne '' ) {
+            $ua->authorization_basic( "$dbuser", "$dbpass" );
+        }
         my $json     = JSON::PP->new;
         my %form     = $json->encode($formjson);
         my $response = $ua->post( $url, \%form );
@@ -242,7 +287,6 @@ sub convert {
         warn "Parallel::ForkManager is not available: $@";
         $hasparallel = 0;
     };
-
     $manager = Parallel::ForkManager->new($threads) if ($hasparallel);
 
     foreach my $ds (@datasets) {
@@ -270,22 +314,90 @@ sub convert {
 
 sub printhelp {
     printf(
-        "Format: %s <param1> <param2> ...
+        qq{Format: %s <param1> <param2> ...
 
 Suported flags include
 
+ # dataset conversion (local only)
   -i/--input folderpath   path to the top folder of a data collection (such as OpenNeuro)
   -o/--output folderpath  path to the output folder storing the converted JSON files
   -db/--database dbname   database name (such as openneuro, openfnirs, dandi etc)
-  -ds/--dataset dataset   dataset name (a single dataset in a collection, such as ds00001)
+  -ds/--dataset dataset   dataset name (a single dataset in a collection, such as ds000001)
+  -v/--rev revision       dataset revision key hash
   -r/--convert            convert database (-db) or dataset (-db .. -ds ..) (in parallel) to JSON
   -t/--threads num        set the thread number for parallel conversion (4 by default)
-  -c/--couchdb url        set the CouchDB REST API root url, use https://neurojson.io:7777 by default
+
+ # list and query NeuroJSON.io (requires Internet)
   -l/--list               list all database if -db is given; or the dataset if both -db/-ds are given
   -q/--info               query database info if -db is given; or dataset info if both -db/-ds are given
-  -f/--find '{\"selector\":,...}' use the CouchDB _find API to search dataset
-  -d/--download           retrieve and display JSON encoded dataset, or complete database (slow)
-", $0
+  -f/--find '{" selector ":,...}' use the CouchDB _find API to search dataset
+
+ # retrieve/upload NeuroJSON.io (except -g, other functions requires -U/-P or NEUROJSON_IO environment variable)
+  -g/--get/--pull         retrieve and display JSON encoded dataset, or complete database (slow)
+  -p/--put/--push dataset.json  upload JSON data to a database (-db) and dataset (if -ds is missing, use file name), (admin only)
+  -c/--create             create a specified database (-db), (admin only)
+  -d/--delete             delete specified database (-ds) from a database (-db), (admin only)
+  -u/--url https://...    CouchDB REST API root url, use https://neurojson.io:7777 (default) or use NEUROJSON_IO env variable
+
+ # admin authentication (-p/-c/-d requires admin account)
+  -n                      read from \$HOME/.netrc (Linux/MacOS) or \%HOME\%/_netrc for username/password for admin tasks
+  --netrc-file /path/netrcfile  same as -n, specify netrc file path (see https://everything.curl.dev/usingcurl/netrc)
+  -U/--user username      set username for admin tasks (unless use -n or -c or NEUROJSON_IO URL has user info)
+  -P/--pass password      set password for admin tasks (unless use -n or -c or NEUROJSON_IO URL has password info)
+
+Note for admins:
+   neuroj accepts 3 ways to set username/password if you are running admin tasks (create/upload/update/delete datasets).
+   Using curl with -n/--netrc-file is the recommended approach as it does not leave passwords in the commands or system logs.
+
+   If one can not install curl, neuroj attempts to use Perl module LWP::UserAgent to communicate with the server.
+   In this case, user may set an environment variable NEUROJSON_IO in the form of https://user:pass\@example.com:port.
+   If user/pass contains special characters, they must be URL-encoded. This way, the neuroj command will not show
+   any password in the log. If you are on a secure computer, using -U/-P will also allow LWP::UserAgent to authenticate.
+
+Examples:
+
+   # print help information and flags
+   neuroj
+
+   # preview commands (dry-run, does not execute) to convert a database (including all included datasets) to JSON
+   neuroj -i /path/to/database/rootfolder -o /path/to/output/json/folder -db openneuro
+
+   # convert a database (a collection of datasets) to JSON in batch with 12 parallel threads (1 thread per dataset)
+   neuroj -i /path/to/database/rootfolder -o /path/to/output/json/folder -db openneuro --convert -t 12
+
+   # convert a single dataset (including all files under sub-folders) to JSON in parallel (1 thread per file)
+   neuroj -i /path/to/database/rootfolder -o /path/to/output/json/folder -db openneuro -ds ds000001 --convert
+
+   # convert a database to JSON, assuming the last segment of the input path as database name
+   neuroj -i /path/to/database/databasename -o /path/to/output/json/folder
+
+   # convert a single dataset ds000001 to JSON (dry-run only, add --convert to run)
+   neuroj -i /path/to/database/databasename -o /path/to/output/json/folder -ds ds000001
+
+   # list all databases currently hosted on NeuroJSON.io
+   neuroj --list
+
+   # list all databases currently hosted on NeuroJSON.io, format the output with jq
+   neuroj --list | jq '.'
+
+   # list all datasets stored under the 'openneuro' database
+   neuroj --list -db openneuro
+
+   # list all datasets strored under the 'openneuro' database and print all datasets using jq filters
+   neuroj --list -db openneuro | jq '.rows[] | .id'
+
+   # query server-level information of the database openneuro (return dataset count, file sizes etc)
+   neuroj --info -db openneuro
+
+   # search the IDs of the first 10 (limit:10) datasets in the openneuro database starting from the 3rd (skip:2) datasets
+   neuroj -db openneuro --find '{" selector ":{}," fields ":[" _id "]," limit ":10," skip ":2}'
+
+   # query the dataset name " _id " and " dataset_description
+          . json " records of the first two datasets in " openneuro " and format with jq
+   neuroj -db openneuro --find '{" selector ":{}," fields ":[" _id "," bids_dataset_info
+          . dataset_description \\\\
+          . json "]," limit ":2}' | jq '.'
+}, $0
     );
     exit 0;
 }

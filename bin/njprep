@@ -1,7 +1,68 @@
 #!/bin/bash
-#===============================================================================
+###############################################################################
 #
-#===============================================================================
+# Neuroimaging dataset to JSON converter (njprep)
+#
+# Author:  Qianqian Fang <q.fang at neu.edu>
+# License: BSD-3-clause
+# Version: 0.5
+# Github:  https://github.com/NeuroJSON/neuroj
+#
+###############################################################################
+#
+# Functions:
+#   njprep is a neuroimaging-data file to JSON converter following the general
+#   rationale of the NeuroJSON project - that is to separate a dataset
+#   into human-readable/searchable part and a non-searchable/binary data portion.
+#
+#   The human-readable part are stored in JSON and can be readily uploaded
+#   to modern document-store databases to allow us to scale to processing large
+#   datasets, making the data searchable, findable and almost universally parsable.
+#
+#   The non-searchable data are stored in binary JSON, or other formats and
+#   can be stored externally while still being associated with the searchable
+#   JSON data using links, URLs or stored as "attachments" to the JSON document.
+#   They can be "re-united" with the searchable data on-demand to restore the
+#   full dataset again.
+#   
+#   For conversion of human-readable data files, njprep currently supports
+#   .json, .tsv, .csv, and various text files (.txt/.md/.rst); for a limit set
+#   of neuroimaging data files, such as .nii.gz, .snirf, njprep parse the file
+#   header into JSON while storing the rest into binary files. njprep also converts
+#   symbolic links to a special JSON element to maintain the linkage.
+#
+# Dependencies:
+#
+# For Linux and Mac OS:
+#   jq, curl, octave, jbids (https://github.com/NeuroJSON/jbids - including 4
+#   submodules under tools), libjson-xs-perl (for JSON::XS)
+#
+# For Windows: please install cygwin64 (http://cygwin.com/) or MSYS2 (http://msys2.org/)
+#   please also install jq, curl, octave, jbids (https://github.com/NeuroJSON/jbids)
+#
+# Converting some of the data files, such as .snirf or
+# .nii/.nii.gz requires octave and the jbids toolbox (including its submodules).
+# Other functionalities does not require octave.
+#
+# Terminology:
+#   "database": a collection of datasets, such as OpenNeuro, Dandi, BrainLife etc
+#   "dataset" : a group of data files that are acquired for a specific study/purpose, may have multiple subjects folders
+#   "subject folder" : a folder storing data obtained from a study subject (human or animal)
+#   "data file": a single data file that is part of a dataset
+#   "BIDS dataset": a dataset that is organized following the BIDS standard (https://bids.neuroimaging.io/)
+#
+# How to use:
+#    # convert all datasets in a database to JSON
+#    njprep /database/root/ /output/json/root/ database_name
+#
+#    # convert a specific dataset "dataset_name" in a specific database to JSON
+#    njprep /database/root/ /output/json/root/ database_name dataset_name
+#
+#    # convert a single file or subject-folder in a given 
+#    njprep /database/root/ /output/json/root/ database_name dataset_name /path/to/a/file
+#
+###############################################################################
+
 set -u #Treat unset variables as an error when substituting.
 
 if [[ $# -lt 3 ]] ; then
@@ -16,7 +77,7 @@ else
 fi
 
 #===============================================================================
-#
+# main function
 #===============================================================================
 
 main() {
@@ -135,7 +196,7 @@ EOF
 )
      octave-cli --eval "$cmd"
 
-  elif [[ "${ff##*.}" =~ "txt" || "${ff##*.}" == "md" || "${fname%.*}" =~ ^(README|CHANGES|CITATION|LICENSE)$ ]]; then # text files
+  elif [[ "${ff##*.}" =~ "txt" || "${ff##*.}" == "md" || "${ff##*.}" == "rst" || "${fname%.*}" =~ ^(README|CHANGES|CITATION|LICENSE)$ ]]; then # text files
      jq -Rsa . "$ff" > "$2/${relpath}.jbids"
 
   elif [[ "${ff##*.}" == "png" || "${ff##*.}" == "jpg" || "${ff##*.}" == "pdf" ]]; then # browser readable documents
