@@ -1,0 +1,3 @@
+[submodule "jbids"]
+	path = jbids
+	url = https://github.com/NeuroJSON/jbids.git

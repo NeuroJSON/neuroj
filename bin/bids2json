@@ -6,13 +6,13 @@ if [[ $# -lt 1 ]] ; then
 fi
 
 topfolder=$PWD
-[[ ! -z "$1" ]] && topfolder=$1
+[[ ! -z "$1" ]] && topfolder=`readlink -f "$1"`
 
 pushd "$PWD"
 
-cd $topfolder
+cd $topfolder || { echo "$topfolder does not exist"; exit 1; }
 
-folderlist=(${topfolder%/}/*/)
+folderlist=( "${topfolder%/}"/\*/ )
 
 if [[ $# -gt 1 ]] ; then
   folderlist="${topfolder%/}/$2"
@@ -22,7 +22,7 @@ for ff in $folderlist
 do
   relpath=`realpath --relative-to="$topfolder" "$ff"`
   echo $relpath
-  jq -n 'reduce inputs as $s ({}; setpath(input_filename|sub(".tsv.json";".tsv")|sub(".jbids";"")|split("/")[1:];$s) )' ${relpath/}/*.jbids > ${ff%/}.json
+  jq -n 'reduce inputs as $s ({}; setpath(input_filename|sub("\\.(?<a>(tsv|nii|snirf|gz))\\.(jbids|json|jnii|jnirs)$";"."+.a)|sub("\\.jbids";"")|split("/")[1:];$s) )' ${relpath/}/*.{jbids,json} > ${ff%/}.json
 done
 
 popd

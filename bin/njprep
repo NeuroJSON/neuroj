@@ -24,7 +24,7 @@
 #   JSON data using links, URLs or stored as "attachments" to the JSON document.
 #   They can be "re-united" with the searchable data on-demand to restore the
 #   full dataset again.
-#   
+#
 #   For conversion of human-readable data files, njprep currently supports
 #   .json, .tsv, .csv, and various text files (.txt/.md/.rst); for a limit set
 #   of neuroimaging data files, such as .nii.gz, .snirf, njprep parse the file
@@ -36,6 +36,12 @@
 # For Linux and Mac OS:
 #   jq, curl, octave, jbids (https://github.com/NeuroJSON/jbids - including 4
 #   submodules under tools), libjson-xs-perl (for JSON::XS)
+#
+#   when using Ubuntu, all dependencies can be set up using the below commands
+#      sudo apt-get install jq curl octave libjson-xs-perl
+#      git clone --recursive https://github.com/NeuroJSON/neuroj.git ~/neuroj
+#      echo "addpath(genpath('~/neuroj/jbids'));" >> ~/.octaverc
+#      #echo 'export PATH=~/neuroj/bin:$PATH' >> ~/.bashrc           # optional
 #
 # For Windows: please install cygwin64 (http://cygwin.com/) or MSYS2 (http://msys2.org/)
 #   please also install jq, curl, octave, jbids (https://github.com/NeuroJSON/jbids)
@@ -183,7 +189,25 @@ function convert_file() {
   elif [[ "${ff##*.}" == "json" ]]; then   # json files
      jq '.' "$ff" > "$2/${relpath}"
 
-  elif [[ "${ff##*.}" == "snirf" ]]; then  # snirf files - use octave+snirfy toolbox
+  elif [[ "${ff##*.}" == "nii"  || "${ff#*.}" == "nii.gz" ]]; then  # nii.gz files (if not a link) - use octave+jnifty toolbox
+     relpath2=`realpath --relative-to="$ds" "$ff"`
+     pathhash=`echo -n "/${relpath2}" | md5sum | cut -d ' ' -f 1`
+
+     [[ ! -d "$2/.att/$dsname" ]] && mkdir -p "$2/.att/$dsname/"
+     cmd=$(cat <<EOF
+nii = nii2jnii('$ff');
+savebj('', nii, 'filename', '$2/.att/$dsname/${pathhash}-zlib.bnii','compression','zlib');
+nii.NIFTIData = struct(encodevarname('_DataLink_'), '${ATTACH_URL}${dsname%/}&file=${pathhash}-zlib.bnii$.NIFTIData');
+savejson('', nii, 'filename', '$2/${relpath}.jnii');
+EOF
+)
+     if [[ ! -z "${NEUROJSON_MATLAB}" ]]; then
+         ${NEUROJSON_MATLAB} -nojvm -nodesktop -nosplash "$cmd;exit"
+     else
+         octave-cli --eval "$cmd"
+     fi
+
+  elif [[ "${ff##*.}" == "snirf" ]]; then  # snirf files (if not a link) - use octave+snirfy toolbox
      relpath2=`realpath --relative-to="$ds" "$ff"`
      pathhash=`echo -n "/${relpath2}" | md5sum | cut -d ' ' -f 1`
 
@@ -194,16 +218,20 @@ savebj('', d2, 'filename', '$2/.att/$dsname/${pathhash}-zlib.jdb','compression',
 savejson('', d1, 'filename', '$2/${relpath}.json');
 EOF
 )
-     octave-cli --eval "$cmd"
+     if [[ ! -z "${NEUROJSON_MATLAB}" ]]; then
+         echo "$cmd;exit" | ${NEUROJSON_MATLAB} -nojvm -nodesktop -nosplash
+     else
+         octave-cli --eval "$cmd"
+     fi
 
-  elif [[ "${ff##*.}" =~ "txt" || "${ff##*.}" == "md" || "${ff##*.}" == "rst" || "${fname%.*}" =~ ^(README|CHANGES|CITATION|LICENSE)$ ]]; then # text files
+  elif [[ "${ff##*.}" =~ ^[Tt][Xx][Tt]$ || "${ff##*.}" == "md" || "${ff##*.}" == "rst" || "${fname%.*}" =~ ^(README|CHANGES|CITATION|LICENSE)$ ]]; then # text files
      jq -Rsa . "$ff" > "$2/${relpath}.jbids"
 
-  elif [[ "${ff##*.}" == "png" || "${ff##*.}" == "jpg" || "${ff##*.}" == "pdf" ]]; then # browser readable documents
+  elif [[ "${ff##*.}" == "png" || "${ff##*.}" == "jpg" || "${ff##*.}" == "pdf" || "${ff#*.}" == "tsv.gz" ]]; then # browser readable documents
      [[ ! -d "$2/.att/$dsname" ]] && mkdir -p "$2/.att/$dsname/"
      relpath2=`realpath --relative-to="$ds" "$ff"`
      pathhash=`echo -n "/${relpath2}" | md5sum | cut -d ' ' -f 1`
-     cp -a "$ff" "$/.att/$dsname/${pathhash}.${ff##*.}"
+     cp -a "$ff" "$/.att/$dsname/${pathhash}.${ff#*.}"
 
   else
      echo "{\"_DataLink_\" : null}" > "$2/${relpath}.jbids"

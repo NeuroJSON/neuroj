@@ -106,7 +106,7 @@ while ( my $opt = $ARGV[0] ) {
             $action{"pull"} = 1;
         } elsif ( $opt eq '-p' || $opt eq '--put' || $opt eq '--push' ) {
             shift;
-            $action{"push"} = shift;
+            $action{"push"} = 1;
         } elsif ( $opt eq '-r' || $opt eq '--convert' ) {
             shift;
             $action{"convert"} = 1;
@@ -121,7 +121,11 @@ while ( my $opt = $ARGV[0] ) {
 }
 
 if ( $infolder ne '' && $outfolder ne '' ) {
-    convert( $infolder, $outfolder, $dbname, $dsname, $action{"convert"} );
+    if ( $dsname eq '*' ) {
+        convert_all( $infolder, $outfolder, $dbname, $dsname, $action{"convert"} );
+    } else {
+        convert( $infolder, $outfolder, $dbname, $dsname, $action{"convert"} );
+    }
 }
 
 if ( exists( $action{"create"} ) && $dbname ne '' ) {
@@ -179,9 +183,29 @@ if ( exists( $action{"pull"} ) && $dbname ne '' && $dsname ne '' ) {
     }
 }
 
+if ( exists( $action{"push"} ) && $dbname ne '' ) {
+    my @dslist = ($dsname);
+
+    if ( $dsname eq '' ) {
+        @dslist = grep { -d } glob("$outfolder/*");
+    }
+    foreach my $ds (@dslist) {
+        if ( $ds =~ /([^\/]+)\/*$/ && -f "$outfolder/$1.json" ) {
+            $ds = $1;
+        } else {
+            next;
+        }
+        my $url = "$serverurl/$dbname/$ds";
+        my $content = webpost( $url, "\@$outfolder/${ds}.json", $dbuser, $dbpass, '-X PUT' );
+        if ( $content ne '' ) {
+            print $content;
+        }
+    }
+}
+
 if ( exists( $action{"find"} ) && $dbname ne '' ) {
     my $url = "$serverurl/$dbname/_find";
-    my $content = webpost( $url, $action{'find'} );
+    my $content = webpost( $url, $action{'find'}, $dbuser, $dbpass );
     if ( $content ne '' ) {
         print $content;
     }
@@ -241,9 +265,23 @@ sub webhead {
 }
 
 sub webpost {
-    my ( $url, $formjson, $dbuser, $dbpass ) = @_;
+    my ( $url, $formjson, $dbuser, $dbpass, $mode ) = @_;
+    $mode = '-X POST' if ( $mode eq '' );
 
-    my $content = `curl -s $action{"netrc"} --header 'Content-Type: application/json' -X POST -d '$formjson' '$url'`;
+    if ( $mode =~ /PUT$/i ) {
+        my $etag = webhead($url);
+        if ( $etag =~ /ETag\s*:\s*"(\d+-.*)"/ ) {
+            my $tmpfile  = `mktemp /tmp/neuroj-XXXXXX`;
+            my $jsonfile = $formjson;
+            $jsonfile =~ s/^\@//g;
+            print "jq '. + { \"_rev\": \"$1\" }' '$jsonfile' > $tmpfile\n";
+            system("jq '. + { \"_rev\": \"$1\" }' '$jsonfile' > $tmpfile");
+            $formjson = "\@$tmpfile";
+        }
+    }
+
+    #print "curl -s $mode $action{netrc} --header 'Content-Type: application/json' -d '$formjson' '$url'\n";
+    my $content = `curl -s $mode $action{netrc} --header 'Content-Type: application/json' -d '$formjson' '$url'`;
     if ( $content eq '' ) {
         eval("use LWP::UserAgent (); 1") or warn "LWP::UserAgent is not available: $@";
         my $ua = LWP::UserAgent->new();
@@ -256,6 +294,20 @@ sub webpost {
         $content = $response->decoded_content;
     }
     return $content;
+}
+
+sub convert_all {
+    my ( $inputroot, $outputroot, $dbname, $dsname, $doconvert ) = @_;
+    my @datasets = glob("$inputroot/*/");
+
+    my @args = ( $inputroot, $outputroot, $dbname, $dsname );
+
+    foreach my $ds (@datasets) {
+        if ( $ds =~ /([^\/]+)\/*$/ ) {
+            $args[3] = $1;
+        }
+        convert( $inputroot, $outputroot, $dbname, $args[3], $doconvert );
+    }
 }
 
 sub convert {
@@ -288,7 +340,7 @@ sub convert {
         $hasparallel = 0;
     };
     $manager = Parallel::ForkManager->new($threads) if ($hasparallel);
-
+    $manager->set_waitpid_blocking_sleep(0.01);
     foreach my $ds (@datasets) {
         if ($hasparallel) {
             $manager->start and next;
@@ -307,8 +359,14 @@ sub convert {
     }
     $manager->wait_all_children if $hasparallel;
 
-    if ( $doconvert == 1 && $dsname ne '' ) {
-        system( "mergejson", "$outputroot/${dsname}" );       # merge subject-folder json files to a single .jbids file
+    if ( $dsname ne '' ) {
+        if ( $doconvert == 1 ) {
+            system( "mergejson", "$outputroot/${dsname}" );    # merge subject-folder json files to a single .jbids file
+            system( "bids2json", $outputroot, ${dsname} );     # merge all .jbids file into a single .json file
+        } else {
+            print "mergejson\t'$outputroot/${dsname}'\n";      # merge subject-folder json files to a single .jbids file
+            print "bids2json\t'$outputroot'\t'${dsname}'\n";   # merge all .jbids file into a single .json file
+        }
     }
 }
 
@@ -374,6 +432,15 @@ Examples:
    # convert a single dataset ds000001 to JSON (dry-run only, add --convert to run)
    neuroj -i /path/to/database/databasename -o /path/to/output/json/folder -ds ds000001
 
+   # convert all datasets under openneuro to JSON using 30 parallel threads, processing 30 files in parallel
+   neuroj -i /path/to/database/rootfolder -o /path/to/output/json/folder -db openneuro -ds \* --convert -t 30
+
+   # once dataset.json files are converted in the output folder, push all .json files to NeuroJSON.io (admin only)
+   neuroj -o /path/to/output/json/folder -db openneuro --push -n
+
+   # upload /path/to/output/json/folder/ds000005.json to neurojson.io:7777/openneuro database
+   neuroj -o /path/to/output/json/folder -db openneuro -ds ds000005 --push -n
+
    # list all databases currently hosted on NeuroJSON.io
    neuroj --list
 
@@ -390,13 +457,10 @@ Examples:
    neuroj --info -db openneuro
 
    # search the IDs of the first 10 (limit:10) datasets in the openneuro database starting from the 3rd (skip:2) datasets
-   neuroj -db openneuro --find '{" selector ":{}," fields ":[" _id "]," limit ":10," skip ":2}'
+   neuroj -db openneuro --find '{"selector":{},"fields":["_id"],"limit":10,"skip":2}'
 
-   # query the dataset name " _id " and " dataset_description
-          . json " records of the first two datasets in " openneuro " and format with jq
-   neuroj -db openneuro --find '{" selector ":{}," fields ":[" _id "," bids_dataset_info
-          . dataset_description \\\\
-          . json "]," limit ":2}' | jq '.'
+   # query the dataset name "_id" and "dataset_description.json" records of the first two datasets in "openneuro" and format with jq
+   neuroj -db openneuro --find '{"selector":{},"fields":["_id","bids_dataset_info.dataset_description\\\\.json"],"limit":2}' | jq '.'
 }, $0
     );
     exit 0;

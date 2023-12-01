@@ -1,0 +1,12 @@
+#!/bin/sh
+# offload large jbids files over specified size to attachment folder ".att/datasetfolder"
+
+rootdir=$PWD
+[[ -z $1 ]] rootdir=$1
+
+maxsize="+10M"
+[[ -z $2 ]] maxsize=$2
+
+
+find "$rootdir" -maxdepth 2  -name "*.jbids" -size "$maxsize" -exec bash -c 'mv  "{}" "$rootdir/.att/{}"; ds="{}"; ds="${ds:2}"; echo  "{\"_DataLink_\":\"https://neurojson.org/io/stat.cgi?action=get&db=openneuro&doc=$(dirname ${ds})&file=$(basename ${ds})\"}" > "{}" ' \;
+
