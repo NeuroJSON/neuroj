@@ -316,7 +316,7 @@ sub convert {
     my $manager;
     my @datasets = ();
     if ( $dsname ne '' ) {
-        find( { wanted => sub { push( @datasets, $_ ) if $_ !~ /\/\.[^\/]+$/ }, no_chdir => 1 }, "$inputroot/$dsname" );
+        find( { wanted => sub { push( @datasets, $_ ) if $_ !~ /\/\.[^\/]+\// }, no_chdir => 1 }, "$inputroot/$dsname" );
     } else {
         @datasets = glob("$inputroot/*/");
     }
