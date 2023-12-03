@@ -460,7 +460,7 @@ Examples:
    neuroj -db openneuro --find '{"selector":{},"fields":["_id"],"limit":10,"skip":2}'
 
    # query the dataset name "_id" and "dataset_description.json" records of the first two datasets in "openneuro" and format with jq
-   neuroj -db openneuro --find '{"selector":{},"fields":["_id","bids_dataset_info.dataset_description\\\\.json"],"limit":2}' | jq '.'
+   neuroj -db openneuro --find '{"selector":{},"fields":["_id","dataset_description\\\\.json"],"limit":2}' | jq '.'
 }, $0
     );
     exit 0;
