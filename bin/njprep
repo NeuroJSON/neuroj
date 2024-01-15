@@ -201,7 +201,7 @@ nii.NIFTIData = struct(encodevarname('_DataLink_'), '${ATTACH_URL}${dsname%/}&fi
 savejson('', nii, 'filename', '$2/${relpath}.jnii');
 EOF
 )
-     if [[ ! -z "${NEUROJSON_MATLAB}" ]]; then
+     if [[ -n "${NEUROJSON_MATLAB+}" ]]; then
          ${NEUROJSON_MATLAB} -nojvm -nodesktop -nosplash "$cmd;exit"
      else
          octave-cli --eval "$cmd"
@@ -218,7 +218,7 @@ savebj('', d2, 'filename', '$2/.att/$dsname/${pathhash}-zlib.jdb','compression',
 savejson('', d1, 'filename', '$2/${relpath}.json');
 EOF
 )
-     if [[ ! -z "${NEUROJSON_MATLAB}" ]]; then
+     if [[ -n "${NEUROJSON_MATLAB+}" ]]; then
          echo "$cmd;exit" | ${NEUROJSON_MATLAB} -nojvm -nodesktop -nosplash
      else
          octave-cli --eval "$cmd"
