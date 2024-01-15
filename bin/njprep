@@ -189,6 +189,14 @@ function convert_file() {
   elif [[ "${ff##*.}" == "json" ]]; then   # json files
      jq '.' "$ff" > "$2/${relpath}"
 
+  elif [[ "${ff##*.}" == "bval" || "${ff#*.}" == "bvec" ]]; then   # bval and bvec files
+     python3 << EOF
+import numpy as np
+import jdata as jd
+data = np.genfromtxt('$ff', dtype=np.float32)
+jd.savet(data, '$2/${relpath}'+'.jbids', {'compression':'zlib'})
+EOF
+
   elif [[ "${ff##*.}" == "nii"  || "${ff#*.}" == "nii.gz" ]]; then  # nii.gz files (if not a link) - use octave+jnifty toolbox
      relpath2=`realpath --relative-to="$ds" "$ff"`
      pathhash=`echo -n "/${relpath2}" | md5sum | cut -d ' ' -f 1`
@@ -198,6 +206,9 @@ function convert_file() {
 nii = nii2jnii('$ff');
 savebj('', nii, 'filename', '$2/.att/$dsname/${pathhash}-zlib.bnii','compression','zlib');
 nii.NIFTIData = struct(encodevarname('_DataLink_'), '${ATTACH_URL}${dsname%/}&file=${pathhash}-zlib.bnii$.NIFTIData');
+if(isfield(nii, 'NIFTIExtension'))
+    nii.NIFTIExtension = struct(encodevarname('_DataLink_'), '${ATTACH_URL}${dsname%/}&file=${pathhash}-zlib.bnii$.NIFTIExtension');
+end
 savejson('', nii, 'filename', '$2/${relpath}.jnii');
 EOF
 )
