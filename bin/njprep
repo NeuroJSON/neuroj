@@ -64,7 +64,7 @@
 #    # convert a specific dataset "dataset_name" in a specific database to JSON
 #    njprep /database/root/ /output/json/root/ database_name dataset_name
 #
-#    # convert a single file or subject-folder in a given 
+#    # convert a single file or subject-folder in a given database and dataset
 #    njprep /database/root/ /output/json/root/ database_name dataset_name /path/to/a/file
 #
 ###############################################################################
@@ -204,10 +204,12 @@ EOF
      [[ ! -d "$2/.att/$dsname" ]] && mkdir -p "$2/.att/$dsname/"
      cmd=$(cat <<EOF
 nii = nii2jnii('$ff');
+nii.NIFTIHeader.SrcFilePath='${relpath}';
 savebj('', nii, 'filename', '$2/.att/$dsname/${pathhash}-zlib.bnii','compression','zlib');
-nii.NIFTIData = struct(encodevarname('_DataLink_'), '${ATTACH_URL}${dsname%/}&file=${pathhash}-zlib.bnii$.NIFTIData');
+info=dir('$2/.att/$dsname/${pathhash}-zlib.bnii');
+nii.NIFTIData = struct(encodevarname('_DataLink_'), ['${ATTACH_URL}${dsname%/}&size=' num2str(info.bytes) '&file=${pathhash}-zlib.bnii:$.NIFTIData']);
 if(isfield(nii, 'NIFTIExtension'))
-    nii.NIFTIExtension = struct(encodevarname('_DataLink_'), '${ATTACH_URL}${dsname%/}&file=${pathhash}-zlib.bnii$.NIFTIExtension');
+    nii.NIFTIExtension = struct(encodevarname('_DataLink_'), ['${ATTACH_URL}${dsname%/}&size=' num2str(info.bytes) '&file=${pathhash}-zlib.bnii:$.NIFTIExtension']);
 end
 savejson('', nii, 'filename', '$2/${relpath}.jnii');
 EOF

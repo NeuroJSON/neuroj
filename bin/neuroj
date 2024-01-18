@@ -433,7 +433,7 @@ Examples:
    neuroj -i /path/to/database/databasename -o /path/to/output/json/folder -ds ds000001
 
    # convert all datasets under openneuro to JSON using 30 parallel threads, processing 30 files in parallel
-   neuroj -i /path/to/database/rootfolder -o /path/to/output/json/folder -db openneuro -ds \* --convert -t 30
+   neuroj -i /path/to/database/rootfolder -o /path/to/output/json/folder -db openneuro -ds \\* --convert -t 30
 
    # once dataset.json files are converted in the output folder, push all .json files to NeuroJSON.io (admin only)
    neuroj -o /path/to/output/json/folder -db openneuro --push -n

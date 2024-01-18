@@ -22,7 +22,7 @@ for ff in $folderlist
 do
   relpath=`realpath --relative-to="$topfolder" "$ff"`
   echo $relpath
-  jq -n 'reduce inputs as $s ({}; setpath(input_filename|sub("\\.(?<a>(tsv|nii|snirf|gz))\\.(jbids|json|jnii|jnirs)$";"."+.a)|sub("\\.jbids";"")|split("/")[1:];$s) )' ${relpath/}/*.{jbids,json} > ${ff%/}.json
+  jq -n 'reduce inputs as $s ({}; setpath(input_filename|sub("\\.(?<a>(tsv|nii|snirf|gz))\\.(jbids|json|jnii|jnirs)$";"."+.a)|sub("\\.jbids";"")|split("/")[1:];$s) )' ${relpath/}/*.{json,jbids} > ${ff%/}.json
 done
 
 popd
