@@ -58,6 +58,9 @@
 #   "BIDS dataset": a dataset that is organized following the BIDS standard (https://bids.neuroimaging.io/)
 #
 # How to use:
+#    # set default external link URL template
+#    export NJPREP_FALLBACK_URL="https://neurojson.org/io/stat.cgi?db=openneuro&doc="
+#
 #    # convert all datasets in a database to JSON
 #    njprep /database/root/ /output/json/root/ database_name
 #
@@ -81,6 +84,11 @@ if [[ $3 =~ ^https*:\/\/ ]]; then
 else
   ATTACH_URL="https://neurojson.org/io/stat.cgi?action=get&db=$3&doc="
 fi
+
+MAX_TSV=${NJPREP_MAX_TSV:-65536}
+MAX_JSON=${NJPREP_MAX_JSON:-65536}
+FALLBACK_URL=${NJPREP_FALLBACK_URL:-""}
+USE_MATLAB=${NJPREP_MATLAB:-""}
 
 #===============================================================================
 # main function
@@ -151,10 +159,11 @@ function convert_file() {
 
   echo "converting file $ff"
 
-  fname=`basename "$ff"`
+  fname=$(basename "$ff")
+  foldername=$(dirname "$ff")
 
   if [[ -L "$ff" ]]; then     # a symbolic link
-     relpath=`realpath --relative-to="$1" $(dirname "$ff")`
+     relpath=`realpath --relative-to="$1" "$foldername"`
      relpath="$relpath/$fname"
   else
      relpath=`realpath --relative-to="$1" "$ff"`
@@ -162,32 +171,65 @@ function convert_file() {
 
   outputdir=`dirname "$2/${relpath}"`
 
+  relpath2=`realpath --relative-to="$ds" "$foldername"`
+  relpath2="$relpath2/$fname"
+  pathhash=`echo -n "/${relpath2}" | md5sum | cut -d ' ' -f 1`
+  filesize=$(stat -c %s "$ff")
+
   [[ ! -d "$outputdir" ]] && mkdir -p "$outputdir" # create output folder if not exist
 
   if [[ -d "$ff" ]]; then       # a folder
      return
 
   elif [[ -L "$ff" ]]; then     # a symbolic link
-     link2json "$ff" > "$2/${relpath}.jbids"
+     link2json "$ff" "$ATTACH_URL${dsname%/}&file=$relpath2" > "$2/${relpath}.jbids"
 
   elif [[ -z "$ff" ]]; then     # empty file or all white-space
      echo "[]" > "$2/${relpath}.jbids"
 
   elif [[ "${ff##*.}" == "tsv" || "${ff##*.}" == "csv" ]]; then    # tsv or csv files
-     filesize=$(stat -c %s "$ff")
-     if [[ "$filesize" -lt 262144 ]]; then  # tsv smaller than 256k is converted to digest
-         tsv2json "$ff" > "$2/${relpath}.jbids"
+     if [[ "$filesize" -lt $MAX_TSV ]]; then  # tsv smaller than 128k is converted to digest
+         fsha1=`sha1sum "$ff" | cut -d ' ' -f 1`
+         if [[ -f "$2/.hash/${dsname%/}/$fsha1" ]]; then
+            newref=$(cat "$2/.hash/${dsname%/}/$fsha1" | sed -e 's/\./\\\\\./g' -e 's/\//./g')
+            echo "{\"_DataLink_\" : \"\$.${newref}\"}" > "$2/${relpath}.jbids"
+         else
+            tsv2json "$ff" > "$2/${relpath}.jbids"
+            [[ ! -d "$2/.hash/$dsname" ]] && mkdir -p "$2/.hash/${dsname%/}/"
+            echo "${relpath2}" > "$2/.hash/${dsname%/}/$fsha1"
+         fi
      else
-         relpath2=`realpath --relative-to="$ds" "$ff"`
-         pathhash=`echo -n "/${relpath2}" | md5sum | cut -d ' ' -f 1`
-
-         [[ ! -d "$2/.att/$dsname" ]] && mkdir -p "$2/.att/${dsname%/}/"
-         tsv2json "$ff" > "$2/.att/${dsname%/}/${pathhash}.tsv.json"
-         echo "{\"_DataLink_\" : \"$ATTACH_URL${dsname%/}&file=${pathhash}.tsv.json\"}" > "$2/${relpath}.jbids"
+         if [[ -n "${FALLBACK_URL}" ]]; then
+             echo "{\"_DataLink_\" : \"$FALLBACK_URL/${dsname%/}/$relpath2&size=$filesize\"}" > "$2/${relpath}.jbids"
+         else
+             [[ ! -d "$2/.att/$dsname" ]] && mkdir -p "$2/.att/${dsname%/}/"
+             tsv2json "$ff" > "$2/.att/${dsname%/}/${pathhash}.tsv.json"
+             filesize=$(stat -c %s "$2/.att/${dsname%/}/${pathhash}.tsv.json")
+             echo "{\"_DataLink_\" : \"$ATTACH_URL${dsname%/}&size=$filesize&file=${pathhash}.tsv.json\"}" > "$2/${relpath}.jbids"
+         fi
      fi
 
   elif [[ "${ff##*.}" == "json" ]]; then   # json files
-     jq '.' "$ff" > "$2/${relpath}"
+     fsha1=`sha1sum "$ff" | cut -d ' ' -f 1`
+     if [[ "$filesize" -lt $MAX_JSON ]]; then  # tsv smaller than 128k is converted to digest
+         if [[ -f "$2/.hash/${dsname%/}/$fsha1" ]]; then
+             newref=$(cat "$2/.hash/${dsname%/}/$fsha1" | sed -e 's/\./\\\\\./g' -e 's/\//./g')
+             echo "{\"_DataLink_\" : \"\$.${newref}\"}" > "$2/${relpath}"
+         else
+             jq -c '.' "$ff" > "$2/${relpath}"
+             [[ ! -d "$2/.hash/$dsname" ]] && mkdir -p "$2/.hash/${dsname%/}/"
+             echo "${relpath2}" > "$2/.hash/${dsname%/}/$fsha1"
+         fi
+     else
+         if [[ -n "${FALLBACK_URL}" ]]; then
+             echo "{\"_DataLink_\" : \"$FALLBACK_URL/${dsname%/}/$relpath2&size=$filesize\"}" > "$2/${relpath}.jbids"
+         else
+             [[ ! -d "$2/.att/$dsname" ]] && mkdir -p "$2/.att/${dsname%/}/"
+             jq -c '.' "$ff" > "$2/.att/${dsname%/}/${pathhash}.json"
+             filesize=$(stat -c %s "$2/.att/${dsname%/}/${pathhash}.json")
+             echo "{\"_DataLink_\" : \"$ATTACH_URL${dsname%/}&size=$filesize&file=${pathhash}.json\"}" > "$2/${relpath}.jbids"
+         fi
+     fi
 
   elif [[ "${ff##*.}" == "bval" || "${ff#*.}" == "bvec" ]]; then   # bval and bvec files
      python3 << EOF
@@ -198,9 +240,6 @@ jd.savet(data, '$2/${relpath}'+'.jbids', {'compression':'zlib'})
 EOF
 
   elif [[ "${ff##*.}" == "nii"  || "${ff#*.}" == "nii.gz" ]]; then  # nii.gz files (if not a link) - use octave+jnifty toolbox
-     relpath2=`realpath --relative-to="$ds" "$ff"`
-     pathhash=`echo -n "/${relpath2}" | md5sum | cut -d ' ' -f 1`
-
      [[ ! -d "$2/.att/$dsname" ]] && mkdir -p "$2/.att/$dsname/"
      cmd=$(cat <<EOF
 nii = nii2jnii('$ff');
@@ -214,16 +253,13 @@ end
 savejson('', nii, 'filename', '$2/${relpath}.jnii');
 EOF
 )
-     if [[ -n "${NEUROJSON_MATLAB+}" ]]; then
-         ${NEUROJSON_MATLAB} -nojvm -nodesktop -nosplash "$cmd;exit"
+     if [[ -n "${USE_MATLAB}" ]]; then
+         ${USE_MATLAB} -nojvm -nodesktop -nosplash "$cmd;exit"
      else
          octave-cli --eval "$cmd"
      fi
 
   elif [[ "${ff##*.}" == "snirf" ]]; then  # snirf files (if not a link) - use octave+snirfy toolbox
-     relpath2=`realpath --relative-to="$ds" "$ff"`
-     pathhash=`echo -n "/${relpath2}" | md5sum | cut -d ' ' -f 1`
-
      [[ ! -d "$2/.att/$dsname" ]] && mkdir -p "$2/.att/$dsname/"
      cmd=$(cat <<EOF
 [d1,d2]=snirf2jbids('$ff', 'pathhash', '${pathhash}', 'compression','zlib','attachproto','${ATTACH_URL}${dsname%/}&file=');
@@ -231,8 +267,8 @@ savebj('', d2, 'filename', '$2/.att/$dsname/${pathhash}-zlib.jdb','compression',
 savejson('', d1, 'filename', '$2/${relpath}.json');
 EOF
 )
-     if [[ -n "${NEUROJSON_MATLAB+}" ]]; then
-         echo "$cmd;exit" | ${NEUROJSON_MATLAB} -nojvm -nodesktop -nosplash
+     if [[ -n "${USE_MATLAB}" ]]; then
+         echo "$cmd;exit" | ${USE_MATLAB} -nojvm -nodesktop -nosplash
      else
          octave-cli --eval "$cmd"
      fi
@@ -242,12 +278,12 @@ EOF
 
   elif [[ "${ff##*.}" == "png" || "${ff##*.}" == "jpg" || "${ff##*.}" == "pdf" || "${ff#*.}" == "tsv.gz" ]]; then # browser readable documents
      [[ ! -d "$2/.att/$dsname" ]] && mkdir -p "$2/.att/$dsname/"
-     relpath2=`realpath --relative-to="$ds" "$ff"`
-     pathhash=`echo -n "/${relpath2}" | md5sum | cut -d ' ' -f 1`
      cp -a "$ff" "$/.att/$dsname/${pathhash}.${ff#*.}"
+     pathhash=`echo -n "/${relpath2}" | md5sum | cut -d ' ' -f 1`
 
   else
-     echo "{\"_DataLink_\" : null}" > "$2/${relpath}.jbids"
+     fileurl=`echo "$relpath2" | perl -pe 's/([^^A-Za-z0-9\-_.!~*()'"'"'])/ sprintf "%%%0x", ord $1 /eg'`
+     echo "{\"_DataLink_\" : \"${ATTACH_URL}${dsname%/}&size=$filesize&file=$fileurl\"}" > "$2/${relpath}.jbids"
      echo "skipping ${ff}"
   fi
 }

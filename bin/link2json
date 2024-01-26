@@ -2,5 +2,17 @@
 
 if [[ -L "$1" ]]; then
     target=`readlink "$1"`
-    echo "{\"_DataLink_\" : \"symlink:$target\"}"
+    if [[ $target =~ \.git\/annex.*\/[A-Z0-9]+-s([0-9]+)- ]]; then
+        if [[ $# -gt 1 ]] ; then
+            echo "{\"_DataLink_\" : \"$2&size=${BASH_REMATCH[1]}\"}"
+        else
+            echo "{\"_DataLink_\" : \"symlink:$target\"}"
+        fi
+    else
+        if [[ $# -gt 1 ]] ; then
+             echo "{\"_DataLink_\" : \"$2\"}"
+        else
+             echo "{\"_DataLink_\" : \"symlink:$target\"}"
+        fi
+    fi
 fi

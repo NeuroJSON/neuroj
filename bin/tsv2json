@@ -6,9 +6,11 @@ use warnings;
 use JSON::XS;
 use Tie::IxHash;
 use Scalar::Util qw(looks_like_number);
+use MIME::Base64;
 
-my ( @header, @val, $ispretty, $file );
-my %data = ();
+my ( @header, @val, $ispretty, $file, %enum, $iscompress );
+my %data    = ();
+my %rawdata = ();
 
 tie %data, 'Tie::IxHash';
 
@@ -19,6 +21,12 @@ if ( @ARGV < 1 ) {
     exit;
 }
 
+$iscompress = ( defined $ENV{'NJPREP_ZIP_TSV'} ) ? $ENV{'NJPREP_ZIP_TSV'} : 0;
+
+if ( @ARGV > 2 ) {
+    $iscompress = $ARGV[2];
+}
+
 open( $file, "<", $ARGV[0] ) or die "File '$ARGV[0]' can't be opened";
 my $delim = "\t";
 
@@ -26,14 +34,76 @@ $delim = ',' if ( $ARGV[0] =~ /\.csv$/i );
 
 while ( my $line = <$file> ) {
     if ( !@header ) {
-        $delim = ( $delim eq "\t" ? ',' : "\t" ) if ( $line !~ /$delim/ );  # auto-detect if column is \t or , separated
+        $delim = ( $delim eq "\t" ? ',' : "\t" )
+          if ( $line !~ /$delim/ );    # auto-detect if column is \t or , separated
         @header = csvsplit( $line, $delim );
+        if ($iscompress) {
+            foreach my $hd (@header) {
+                $enum{$hd} = ();
+                tie %{ $enum{$hd} }, 'Tie::IxHash';
+            }
+        }
     } else {
         @val = csvsplit( $line, $delim );
         for ( my $i = 0 ; $i <= $#header ; $i++ ) {
             if ( $i <= $#val ) {
-                push( @{ $data{ $header[$i] } }, $val[$i] );
+                if ($iscompress) {
+                    if ( exists $enum{ $header[$i] }->{ $val[$i] } ) {
+                        push( @{ $data{ $header[$i] } }, $enum{ $header[$i] }->{ $val[$i] } );
+                    } else {
+                        my $keylen = keys %{ $enum{ $header[$i] } };
+                        $enum{ $header[$i] }->{ $val[$i] } = $keylen + 1;
+                        push( @{ $data{ $header[$i] } }, $keylen + 1 );
+                    }
+                    push( @{ $rawdata{ $header[$i] } }, ( looks_like_number( $val[$i] ) ? $val[$i] + 0 : $val[$i] ) );
+                } else {
+                    push( @{ $data{ $header[$i] } }, ( looks_like_number( $val[$i] ) ? $val[$i] + 0 : $val[$i] ) );
+                }
             }
+        }
+    }
+}
+
+if ($iscompress) {
+    my ( $datatype, $zipoutput, $buf, $keylen, $valuelen );
+    foreach my $hd ( keys %data ) {
+        $keylen = keys %{ $enum{$hd} };
+        if ( $keylen < 256 ) {
+            $buf      = pack( 'C*', @{ $data{$hd} } );
+            $datatype = 'uint8';
+        } elsif ( $keylen < 65536 ) {
+            $buf      = pack( 'S*', @{ $data{$hd} } );
+            $datatype = 'uint16';
+        } else {
+            $buf      = pack( 'L*', @{ $data{$hd} } );
+            $datatype = 'uint32';
+        }
+        eval("use Compress::Zlib; 1")
+          or warn "Compress::Zlib is not available: $@";
+        my ( $zipper, $status ) = deflateInit();
+        $zipoutput = '';
+        $zipoutput = $zipper->deflate($buf);
+        $zipoutput .= $zipper->flush();
+        die "zlib compression failed\n" if ( $zipoutput eq '' );
+        $valuelen = scalar( @{ $data{$hd} } );
+
+        if ( $valuelen > 2 * $keylen ) {
+            delete $data{$hd};
+
+            %{ $data{$hd} } = ();
+            tie %{ $data{$hd} }, 'Tie::IxHash';
+            @{ $data{$hd}->{'_EnumKey_'} } = ( keys %{ $enum{$hd} } );
+
+            %{ $data{$hd}->{'_EnumValue_'} } = ();
+            tie %{ $data{$hd}->{'_EnumValue_'} }, 'Tie::IxHash';
+            $data{$hd}->{'_EnumValue_'}->{'_ArraySize_'}    = $valuelen;
+            $data{$hd}->{'_EnumValue_'}->{'_ArrayType_'}    = $datatype;
+            $data{$hd}->{'_EnumValue_'}->{'_ArrayZipType_'} = 'zlib';
+            $data{$hd}->{'_EnumValue_'}->{'_ArrayZipSize_'} = $valuelen;
+            $data{$hd}->{'_EnumValue_'}->{'_ArrayZipData_'} =
+              encode_base64($zipoutput);
+        } else {
+            @{ $data{$hd} } = @{ $rawdata{$hd} };
         }
     }
 }
@@ -52,7 +122,7 @@ if (@header) {
 
 sub csvsplit {
     my $line = shift;
-    my $sep = ( shift or ',' );
+    my $sep  = ( shift or ',' );
 
     return () unless $line;
 
@@ -62,7 +132,12 @@ sub csvsplit {
     my $re = qr/(?:^|$sep)(?:"([^"]*)"|([^$sep]*))/;
     while ( $line =~ /$re/g ) {
         my $value = defined $1 ? $1 : $2;
-        push @cells, ( defined $value ? ( looks_like_number($value) ? $value + 0 : $value ) : '' );
+        push @cells,
+          (
+            defined $value
+            ? ( looks_like_number($value) ? $value + 0 : $value )
+            : ''
+          );
     }
     return @cells;
 }

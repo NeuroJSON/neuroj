@@ -42,7 +42,7 @@ if ( @ARGV == 0 || grep( /^--help$/, @ARGV ) || grep( /^-h$/, @ARGV ) ) {
 }
 
 my ( $infolder, $outfolder, $dbname, $dsname, $threads, $dbuser, $dbpass );
-my %action = ();
+my %action    = ();
 my $serverurl = ( exists $ENV{"NEUROJSON_IO"} ) ? $ENV{"NEUROJSON_IO"} : "https://neurojson.io:7777";
 
 $threads = 4;
@@ -195,7 +195,7 @@ if ( exists( $action{"push"} ) && $dbname ne '' ) {
         } else {
             next;
         }
-        my $url = "$serverurl/$dbname/$ds";
+        my $url     = "$serverurl/$dbname/$ds";
         my $content = webpost( $url, "\@$outfolder/${ds}.json", $dbuser, $dbpass, '-X PUT' );
         if ( $content ne '' ) {
             print $content;
@@ -204,7 +204,7 @@ if ( exists( $action{"push"} ) && $dbname ne '' ) {
 }
 
 if ( exists( $action{"find"} ) && $dbname ne '' ) {
-    my $url = "$serverurl/$dbname/_find";
+    my $url     = "$serverurl/$dbname/_find";
     my $content = webpost( $url, $action{'find'}, $dbuser, $dbpass );
     if ( $content ne '' ) {
         print $content;
@@ -316,7 +316,8 @@ sub convert {
     my $manager;
     my @datasets = ();
     if ( $dsname ne '' ) {
-        find( { wanted => sub { push( @datasets, $_ ) if $_ !~ /\/\.[^\/]+\// }, no_chdir => 1 }, "$inputroot/$dsname" );
+        find( { wanted => sub { push( @datasets, $_ ) if $_ !~ /\/\.[^\/]+\// }, no_chdir => 1 },
+            "$inputroot/$dsname" );
     } else {
         @datasets = glob("$inputroot/*/");
     }
