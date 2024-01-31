@@ -87,6 +87,7 @@ fi
 
 MAX_TSV=${NJPREP_MAX_TSV:-65536}
 MAX_JSON=${NJPREP_MAX_JSON:-65536}
+MAX_BVEC=${NJPREP_MAX_BVEC:-65536}
 FALLBACK_URL=${NJPREP_FALLBACK_URL:-""}
 USE_MATLAB=${NJPREP_MATLAB:-""}
 
@@ -138,6 +139,7 @@ function convert_dataset() {
   shopt -s globstar
 
   echo "converting dataset $dsname"
+  rm -rf "$2/.hash/${dsname%/}/"
 
   for ff in ${1%/}/${dsname%/}/**
   do
@@ -188,7 +190,7 @@ function convert_file() {
      echo "[]" > "$2/${relpath}.jbids"
 
   elif [[ "${ff##*.}" == "tsv" || "${ff##*.}" == "csv" ]]; then    # tsv or csv files
-     if [[ "$filesize" -lt $MAX_TSV ]]; then  # tsv smaller than 128k is converted to digest
+     if [[ "$filesize" -lt $MAX_TSV || $fname == "participants.tsv" ]]; then  # tsv smaller than 128k is converted to digest
          fsha1=`sha1sum "$ff" | cut -d ' ' -f 1`
          if [[ -f "$2/.hash/${dsname%/}/$fsha1" ]]; then
             newref=$(cat "$2/.hash/${dsname%/}/$fsha1" | sed -e 's/\./\\\\\./g' -e 's/\//./g')
@@ -232,13 +234,16 @@ function convert_file() {
      fi
 
   elif [[ "${ff##*.}" == "bval" || "${ff#*.}" == "bvec" ]]; then   # bval and bvec files
-     python3 << EOF
+     if [[ "$filesize" -gt $MAX_BVEC ]]; then  # tsv smaller than 128k is converted to digest
+         echo "{\"_DataLink_\" : \"$FALLBACK_URL/${dsname%/}/$relpath2&size=$filesize\"}" > "$2/${relpath}.jbids"
+     else
+         python3 << EOF
 import numpy as np
 import jdata as jd
 data = np.genfromtxt('$ff', dtype=np.float32)
 jd.savet(data, '$2/${relpath}'+'.jbids', {'compression':'zlib'})
 EOF
-
+     fi
   elif [[ "${ff##*.}" == "nii"  || "${ff#*.}" == "nii.gz" ]]; then  # nii.gz files (if not a link) - use octave+jnifty toolbox
      [[ ! -d "$2/.att/$dsname" ]] && mkdir -p "$2/.att/$dsname/"
      cmd=$(cat <<EOF

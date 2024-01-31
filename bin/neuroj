@@ -42,7 +42,7 @@ if ( @ARGV == 0 || grep( /^--help$/, @ARGV ) || grep( /^-h$/, @ARGV ) ) {
 }
 
 my ( $infolder, $outfolder, $dbname, $dsname, $threads, $dbuser, $dbpass );
-my %action    = ();
+my %action = ();
 my $serverurl = ( exists $ENV{"NEUROJSON_IO"} ) ? $ENV{"NEUROJSON_IO"} : "https://neurojson.io:7777";
 
 $threads = 4;
@@ -195,7 +195,7 @@ if ( exists( $action{"push"} ) && $dbname ne '' ) {
         } else {
             next;
         }
-        my $url     = "$serverurl/$dbname/$ds";
+        my $url = "$serverurl/$dbname/$ds";
         my $content = webpost( $url, "\@$outfolder/${ds}.json", $dbuser, $dbpass, '-X PUT' );
         if ( $content ne '' ) {
             print $content;
@@ -204,7 +204,7 @@ if ( exists( $action{"push"} ) && $dbname ne '' ) {
 }
 
 if ( exists( $action{"find"} ) && $dbname ne '' ) {
-    my $url     = "$serverurl/$dbname/_find";
+    my $url = "$serverurl/$dbname/_find";
     my $content = webpost( $url, $action{'find'}, $dbuser, $dbpass );
     if ( $content ne '' ) {
         print $content;
@@ -270,17 +270,19 @@ sub webpost {
 
     if ( $mode =~ /PUT$/i ) {
         my $etag = webhead($url);
-        if ( $etag =~ /ETag\s*:\s*"(\d+-.*)"/ ) {
-            my $tmpfile  = `mktemp /tmp/neuroj-XXXXXX`;
+        if ( $etag =~ /ETag:\s*"([0-9]+\-.*)"/m ) {
+            my $tmpfile = `mktemp /tmp/neuroj-XXXXXX`;
+            chomp($tmpfile);
             my $jsonfile = $formjson;
+            my $revid    = $1;
             $jsonfile =~ s/^\@//g;
-            print "jq '. + { \"_rev\": \"$1\" }' '$jsonfile' > $tmpfile\n";
-            system("jq '. + { \"_rev\": \"$1\" }' '$jsonfile' > $tmpfile");
+            print "jq '. + { \"_rev\": \"$revid\" }' '$jsonfile' > $tmpfile\n";
+            system("jq '. + { \"_rev\": \"$revid\" }' '$jsonfile' > $tmpfile");
             $formjson = "\@$tmpfile";
         }
     }
 
-    #print "curl -s $mode $action{netrc} --header 'Content-Type: application/json' -d '$formjson' '$url'\n";
+    print "curl -s $mode $action{netrc} --header 'Content-Type: application/json' -d '$formjson' '$url'\n";
     my $content = `curl -s $mode $action{netrc} --header 'Content-Type: application/json' -d '$formjson' '$url'`;
     if ( $content eq '' ) {
         eval("use LWP::UserAgent (); 1") or warn "LWP::UserAgent is not available: $@";
@@ -306,6 +308,7 @@ sub convert_all {
         if ( $ds =~ /([^\/]+)\/*$/ ) {
             $args[3] = $1;
         }
+        system("rm -rf '$outputroot/.hash/$args[3]/'");
         convert( $inputroot, $outputroot, $dbname, $args[3], $doconvert );
     }
 }

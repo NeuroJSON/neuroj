@@ -8,7 +8,7 @@ use Tie::IxHash;
 use Scalar::Util qw(looks_like_number);
 use MIME::Base64;
 
-my ( @header, @val, $ispretty, $file, %enum, $iscompress );
+my ( @header, @val, $ispretty, $file, %enum, $iscompress, $keymeta );
 my %data    = ();
 my %rawdata = ();
 
@@ -22,9 +22,14 @@ if ( @ARGV < 1 ) {
 }
 
 $iscompress = ( defined $ENV{'NJPREP_ZIP_TSV'} ) ? $ENV{'NJPREP_ZIP_TSV'} : 0;
+$keymeta = 0;
 
 if ( @ARGV > 2 ) {
     $iscompress = $ARGV[2];
+}
+
+if ( $ARGV[0] =~ /participants\.[tc]sv$/ ) {
+    $keymeta = 1;
 }
 
 open( $file, "<", $ARGV[0] ) or die "File '$ARGV[0]' can't be opened";
@@ -47,7 +52,7 @@ while ( my $line = <$file> ) {
         @val = csvsplit( $line, $delim );
         for ( my $i = 0 ; $i <= $#header ; $i++ ) {
             if ( $i <= $#val ) {
-                if ($iscompress) {
+                if ( $iscompress && !( $keymeta == 1 && $header[$i] =~ /age|sex|gender/i ) ) {
                     if ( exists $enum{ $header[$i] }->{ $val[$i] } ) {
                         push( @{ $data{ $header[$i] } }, $enum{ $header[$i] }->{ $val[$i] } );
                     } else {
@@ -67,43 +72,45 @@ while ( my $line = <$file> ) {
 if ($iscompress) {
     my ( $datatype, $zipoutput, $buf, $keylen, $valuelen );
     foreach my $hd ( keys %data ) {
-        $keylen = keys %{ $enum{$hd} };
-        if ( $keylen < 256 ) {
-            $buf      = pack( 'C*', @{ $data{$hd} } );
-            $datatype = 'uint8';
-        } elsif ( $keylen < 65536 ) {
-            $buf      = pack( 'S*', @{ $data{$hd} } );
-            $datatype = 'uint16';
-        } else {
-            $buf      = pack( 'L*', @{ $data{$hd} } );
-            $datatype = 'uint32';
-        }
-        eval("use Compress::Zlib; 1")
-          or warn "Compress::Zlib is not available: $@";
-        my ( $zipper, $status ) = deflateInit();
-        $zipoutput = '';
-        $zipoutput = $zipper->deflate($buf);
-        $zipoutput .= $zipper->flush();
-        die "zlib compression failed\n" if ( $zipoutput eq '' );
-        $valuelen = scalar( @{ $data{$hd} } );
+        if ( !( $keymeta == 1 && $hd =~ /age|sex|gender/i ) ) {
+            $keylen = keys %{ $enum{$hd} };
+            if ( $keylen < 256 ) {
+                $buf = pack( 'C*', @{ $data{$hd} } );
+                $datatype = 'uint8';
+            } elsif ( $keylen < 65536 ) {
+                $buf = pack( 'S*', @{ $data{$hd} } );
+                $datatype = 'uint16';
+            } else {
+                $buf = pack( 'L*', @{ $data{$hd} } );
+                $datatype = 'uint32';
+            }
+            eval("use Compress::Zlib; 1")
+              or warn "Compress::Zlib is not available: $@";
+            my ( $zipper, $status ) = deflateInit();
+            $zipoutput = '';
+            $zipoutput = $zipper->deflate($buf);
+            $zipoutput .= $zipper->flush();
+            die "zlib compression failed\n" if ( $zipoutput eq '' );
+            $valuelen = scalar( @{ $data{$hd} } );
 
-        if ( $valuelen > 2 * $keylen ) {
-            delete $data{$hd};
+            if ( $valuelen > 2 * $keylen ) {
+                delete $data{$hd};
 
-            %{ $data{$hd} } = ();
-            tie %{ $data{$hd} }, 'Tie::IxHash';
-            @{ $data{$hd}->{'_EnumKey_'} } = ( keys %{ $enum{$hd} } );
+                %{ $data{$hd} } = ();
+                tie %{ $data{$hd} }, 'Tie::IxHash';
+                @{ $data{$hd}->{'_EnumKey_'} } = ( keys %{ $enum{$hd} } );
 
-            %{ $data{$hd}->{'_EnumValue_'} } = ();
-            tie %{ $data{$hd}->{'_EnumValue_'} }, 'Tie::IxHash';
-            $data{$hd}->{'_EnumValue_'}->{'_ArraySize_'}    = $valuelen;
-            $data{$hd}->{'_EnumValue_'}->{'_ArrayType_'}    = $datatype;
-            $data{$hd}->{'_EnumValue_'}->{'_ArrayZipType_'} = 'zlib';
-            $data{$hd}->{'_EnumValue_'}->{'_ArrayZipSize_'} = $valuelen;
-            $data{$hd}->{'_EnumValue_'}->{'_ArrayZipData_'} =
-              encode_base64($zipoutput);
-        } else {
-            @{ $data{$hd} } = @{ $rawdata{$hd} };
+                %{ $data{$hd}->{'_EnumValue_'} } = ();
+                tie %{ $data{$hd}->{'_EnumValue_'} }, 'Tie::IxHash';
+                $data{$hd}->{'_EnumValue_'}->{'_ArraySize_'}    = $valuelen;
+                $data{$hd}->{'_EnumValue_'}->{'_ArrayType_'}    = $datatype;
+                $data{$hd}->{'_EnumValue_'}->{'_ArrayZipType_'} = 'zlib';
+                $data{$hd}->{'_EnumValue_'}->{'_ArrayZipSize_'} = $valuelen;
+                $data{$hd}->{'_EnumValue_'}->{'_ArrayZipData_'} =
+                  encode_base64($zipoutput);
+            } else {
+                @{ $data{$hd} } = @{ $rawdata{$hd} };
+            }
         }
     }
 }
@@ -122,7 +129,7 @@ if (@header) {
 
 sub csvsplit {
     my $line = shift;
-    my $sep  = ( shift or ',' );
+    my $sep = ( shift or ',' );
 
     return () unless $line;
 
@@ -135,9 +142,14 @@ sub csvsplit {
         push @cells,
           (
             defined $value
-            ? ( looks_like_number($value) ? $value + 0 : $value )
+            ? ( looks_like_number($value) ? $value + 0 : trim($value) )
             : ''
           );
     }
     return @cells;
+}
+
+sub trim {
+    ( my $s = $_[0] ) =~ s/^\s+|\s+$//g;
+    return $s;
 }
