@@ -87,6 +87,7 @@ fi
 
 MAX_TSV=${NJPREP_MAX_TSV:-65536}
 MAX_JSON=${NJPREP_MAX_JSON:-65536}
+MAX_BJSON=${NJPREP_MAX_BJSON:-65536}
 MAX_BVEC=${NJPREP_MAX_BVEC:-65536}
 FALLBACK_URL=${NJPREP_FALLBACK_URL:-""}
 USE_MATLAB=${NJPREP_MATLAB:-""}
@@ -211,9 +212,9 @@ function convert_file() {
          fi
      fi
 
-  elif [[ "${ff##*.}" == "json" ]]; then   # json files
+  elif [[ "${ff##*.}" == "json" || "${ff##*.}" == "jmsh" || "${ff##*.}" == "jnii" || "${ff##*.}" == "jnirs" ]]; then   # json files
      fsha1=`sha1sum "$ff" | cut -d ' ' -f 1`
-     if [[ "$filesize" -lt $MAX_JSON ]]; then  # tsv smaller than 128k is converted to digest
+     if [[ "$filesize" -lt $MAX_JSON ]]; then  # tsv smaller than 64k is converted to digest
          if [[ -f "$2/.hash/${dsname%/}/$fsha1" ]]; then
              newref=$(cat "$2/.hash/${dsname%/}/$fsha1" | sed -e 's/\./\\\\\./g' -e 's/\//./g')
              echo "{\"_DataLink_\" : \"\$.${newref}\"}" > "$2/${relpath}"
@@ -232,9 +233,21 @@ function convert_file() {
              echo "{\"_DataLink_\" : \"$ATTACH_URL${dsname%/}&size=$filesize&file=${pathhash}.json\"}" > "$2/${relpath}.jbids"
          fi
      fi
+  elif [[ "${ff##*.}" == "bmsh" || "${ff##*.}" == "bnii" || "${ff##*.}" == "bnirs" ]]; then   # json files
+     if [[ "$filesize" -lt $MAX_BJSON ]]; then  # tsv smaller than 64k is converted to digest
+         python3 << EOF
+import jdata as jd
+data = jd.load('$ff');
+jd.savet(data, '$2/${relpath}'+'.jbids', {'compression':'zlib'})
+EOF
+     else
+         [[ ! -d "$2/.att/$dsname" ]] && mkdir -p "$2/.att/${dsname%/}/"
+         cp -a "$ff" "$2/.att/${dsname%/}/${pathhash}.${ff##*.}"
+         echo "{\"_DataLink_\" : \"$ATTACH_URL${dsname%/}&size=$filesize&file=${pathhash}.${ff##*.}\"}" > "$2/${relpath}.jbids"
+     fi
 
   elif [[ "${ff##*.}" == "bval" || "${ff#*.}" == "bvec" ]]; then   # bval and bvec files
-     if [[ "$filesize" -gt $MAX_BVEC ]]; then  # tsv smaller than 128k is converted to digest
+     if [[ "$filesize" -gt $MAX_BVEC ]]; then  # tsv smaller than 64k is converted to digest
          echo "{\"_DataLink_\" : \"$FALLBACK_URL/${dsname%/}/$relpath2&size=$filesize\"}" > "$2/${relpath}.jbids"
      else
          python3 << EOF
