@@ -59,7 +59,7 @@
 #
 # How to use:
 #    # set default external link URL template
-#    export NJPREP_FALLBACK_URL="https://neurojson.org/io/stat.cgi?db=openneuro&doc="
+#    export NJPREP_FALLBACK_URL="https://neurojson.org/io/stat.cgi?action=get&db=%DB%&doc=%DS%"
 #
 #    # convert all datasets in a database to JSON
 #    njprep /database/root/ /output/json/root/ database_name
@@ -84,6 +84,8 @@ if [[ $3 =~ ^https*:\/\/ ]]; then
 else
   ATTACH_URL="https://neurojson.org/io/stat.cgi?action=get&db=$3&doc="
 fi
+
+DBNAME=$3
 
 MAX_TSV=${NJPREP_MAX_TSV:-65536}
 MAX_JSON=${NJPREP_MAX_JSON:-65536}
@@ -191,7 +193,7 @@ function convert_file() {
      echo "[]" > "$2/${relpath}.jbids"
 
   elif [[ "${ff##*.}" == "tsv" || "${ff##*.}" == "csv" ]]; then    # tsv or csv files
-     if [[ "$filesize" -lt $MAX_TSV || $fname == "participants.tsv" ]]; then  # tsv smaller than 128k is converted to digest
+     if [[ $filesize -lt $MAX_TSV || $fname == "participants.tsv" ]]; then  # tsv smaller than 128k is converted to digest
          fsha1=`sha1sum "$ff" | cut -d ' ' -f 1`
          if [[ -f "$2/.hash/${dsname%/}/$fsha1" ]]; then
             newref=$(cat "$2/.hash/${dsname%/}/$fsha1" | sed -e 's/\./\\\\\./g' -e 's/\//./g')
@@ -203,7 +205,8 @@ function convert_file() {
          fi
      else
          if [[ -n "${FALLBACK_URL}" ]]; then
-             echo "{\"_DataLink_\" : \"$FALLBACK_URL/${dsname%/}/$relpath2&size=$filesize\"}" > "$2/${relpath}.jbids"
+             newurl=`echo ${FALLBACK_URL} | sed -e "s/%DB%/$DBNAME/g" -e "s/%DS%/${dsname%/}/g"`
+             echo "{\"_DataLink_\" : \"$newurl&size=$filesize&file=$relpath2\"}" > "$2/${relpath}.jbids"
          else
              [[ ! -d "$2/.att/$dsname" ]] && mkdir -p "$2/.att/${dsname%/}/"
              tsv2json "$ff" > "$2/.att/${dsname%/}/${pathhash}.tsv.json"

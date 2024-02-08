@@ -121,7 +121,7 @@ while ( my $opt = $ARGV[0] ) {
 }
 
 if ( $infolder ne '' && $outfolder ne '' ) {
-    if ( $dsname eq '*' ) {
+    if ( $dsname eq '*' || $dsname =~ /\s+/ ) {
         convert_all( $infolder, $outfolder, $dbname, $dsname, $action{"convert"} );
     } else {
         convert( $infolder, $outfolder, $dbname, $dsname, $action{"convert"} );
@@ -300,13 +300,21 @@ sub webpost {
 
 sub convert_all {
     my ( $inputroot, $outputroot, $dbname, $dsname, $doconvert ) = @_;
-    my @datasets = glob("$inputroot/*/");
+    my @datasets;
+    if ( $dsname eq '*' ) {
+        @datasets = glob("$inputroot/*/");
+    } elsif ( $dsname =~ /\s+/ ) {
+        @datasets = split( /\s+/, $dsname );
+    }
 
     my @args = ( $inputroot, $outputroot, $dbname, $dsname );
 
     foreach my $ds (@datasets) {
-        if ( $ds =~ /([^\/]+)\/*$/ ) {
+        if ( $dsname eq '*' && $ds =~ /([^\/]+)\/*$/ ) {
             $args[3] = $1;
+        } else {
+            $args[3] = $ds;
+            $args[3] =~ s/.*\///g;
         }
         system("rm -rf '$outputroot/.hash/$args[3]/'");
         convert( $inputroot, $outputroot, $dbname, $args[3], $doconvert );
@@ -375,8 +383,8 @@ sub convert {
 }
 
 sub printhelp {
-    printf(
-        qq{Format: %s <param1> <param2> ...
+    print(
+        qq{Format: $0 <param1> <param2> ...
 
 Suported flags include
 
@@ -402,7 +410,7 @@ Suported flags include
   -u/--url https://...    CouchDB REST API root url, use https://neurojson.io:7777 (default) or use NEUROJSON_IO env variable
 
  # admin authentication (-p/-c/-d requires admin account)
-  -n                      read from \$HOME/.netrc (Linux/MacOS) or \%HOME\%/_netrc for username/password for admin tasks
+  -n                      read from \$HOME/.netrc (Linux/MacOS) or \%HOME%/_netrc for username/password for admin tasks
   --netrc-file /path/netrcfile  same as -n, specify netrc file path (see https://everything.curl.dev/usingcurl/netrc)
   -U/--user username      set username for admin tasks (unless use -n or -c or NEUROJSON_IO URL has user info)
   -P/--pass password      set password for admin tasks (unless use -n or -c or NEUROJSON_IO URL has password info)
@@ -465,7 +473,7 @@ Examples:
 
    # query the dataset name "_id" and "dataset_description.json" records of the first two datasets in "openneuro" and format with jq
    neuroj -db openneuro --find '{"selector":{},"fields":["_id","dataset_description\\\\.json"],"limit":2}' | jq '.'
-}, $0
+}
     );
     exit 0;
 }
