@@ -22,7 +22,7 @@ if ( @ARGV < 1 ) {
 }
 
 $iscompress = ( defined $ENV{'NJPREP_ZIP_TSV'} ) ? $ENV{'NJPREP_ZIP_TSV'} : 0;
-$keymeta = 0;
+$keymeta    = 0;
 
 if ( @ARGV > 2 ) {
     $iscompress = $ARGV[2];
@@ -75,13 +75,13 @@ if ($iscompress) {
         if ( !( $keymeta == 1 && $hd =~ /age|sex|gender/i ) ) {
             $keylen = keys %{ $enum{$hd} };
             if ( $keylen < 256 ) {
-                $buf = pack( 'C*', @{ $data{$hd} } );
+                $buf      = pack( 'C*', @{ $data{$hd} } );
                 $datatype = 'uint8';
             } elsif ( $keylen < 65536 ) {
-                $buf = pack( 'S*', @{ $data{$hd} } );
+                $buf      = pack( 'S*', @{ $data{$hd} } );
                 $datatype = 'uint16';
             } else {
-                $buf = pack( 'L*', @{ $data{$hd} } );
+                $buf      = pack( 'L*', @{ $data{$hd} } );
                 $datatype = 'uint32';
             }
             eval("use Compress::Zlib; 1")
@@ -129,7 +129,7 @@ if (@header) {
 
 sub csvsplit {
     my $line = shift;
-    my $sep = ( shift or ',' );
+    my $sep  = ( shift or ',' );
 
     return () unless $line;
 

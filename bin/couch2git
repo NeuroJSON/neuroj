@@ -1,0 +1,53 @@
+#!/bin/bash
+
+serverurl=https://neurojson.io:7777
+bowserurl=https://neurojson.org/db
+
+dbname=$1
+
+[[ $# -gt 1 ]] && serverurl=$2
+
+mkdir -p "$dbname"
+cd "$dbname"
+
+git init .
+
+currdate=$(date '+%Y-%m-%d_%H:%M:%S')
+
+cat << EOF > README.md
+# NeuroJSON database: $dbname
+- Database URL: $bowserurl/$dbname
+- REST URL: $serverurl/$dbname
+- Snapshot time: $currdate
+EOF
+
+git add README.md
+git commit -a -m "Initial commit"
+
+mkdir orig
+mkdir json
+cd json
+
+curl -s -X GET "$serverurl/$dbname/_changes"  | jq -c -r '.results | .[] | "\(.id)\t\(.changes | .[] | .rev)\t\(.deleted)"' | \
+while read doc rev isdel
+do
+  echo "processing: $doc $rev $isdel"
+
+  [[ "$isdel" == "true"  ]] && continue;
+
+  maxrev=`echo $rev | grep -o '^[0-9]*'`
+  curl -s -X GET "$serverurl/$dbname/$doc?revs_info=true"  | flatjson > "_${doc}_revs.json"
+  allrev=`cat "_${doc}_revs.json" | jq -r '._revs_info | .[] | .rev' | tac -r`
+
+  for revidx in $allrev
+  do
+    if [[ $maxrev -eq 1 ]]; then
+      mv "_${doc}_revs.json" "${doc}.json"
+    else
+      curl -s -X GET "$serverurl/$dbname/$doc?rev=$revidx" | flatjson > "${doc}.json"
+    fi
+
+    git add "${doc}.json"
+    git commit -a -m "Update $doc to $revidx"
+  done
+done
