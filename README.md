@@ -7,6 +7,7 @@ Utilities to convert datasets to JSON and access RESTful data on NeuroJSON.io
 -   License: BSD 3-Clause License
 -   Version: 0.5
 -   Website: <https://neurojson.org>
+-   Docker image: <https://hub.docker.com/r/openjdata/neuroj>
 
 
 Table of content
