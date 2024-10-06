@@ -186,7 +186,7 @@ function convert_file() {
   if [[ -d "$ff" ]]; then       # a folder
      return
 
-  elif [[ -L "$ff" ]]; then     # a symbolic link
+  elif [[ -L "$ff" && ! -e "$ff" ]]; then     # a symbolic link
      link2json "$ff" "$ATTACH_URL${dsname%/}&file=$relpath2" > "$2/${relpath}.jbids"
 
   elif [[ -z "$ff" ]]; then     # empty file or all white-space

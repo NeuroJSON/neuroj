@@ -1,5 +1,10 @@
 #!/bin/bash
 
+if [[ $# -lt 1 ]] ; then
+  echo "format: couch2git databasename <couchdbserver_url>"
+  exit
+fi
+
 serverurl=https://neurojson.io:7777
 bowserurl=https://neurojson.org/db
 
