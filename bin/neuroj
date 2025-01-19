@@ -385,6 +385,12 @@ sub convert {
 
     if ( $dsname ne '' ) {
         if ( $doconvert == 1 ) {
+            if((!-f "$outputroot/${dsname}/dataset_description.json") && -f "$inputroot/dataset_description.json") {
+                system("cat '$inputroot/dataset_description.json' > '$outputroot/${dsname}/dataset_description.json'");
+            }
+            if((!-f "$outputroot/${dsname}/participants.tsv.json") && -f "$inputroot/participants.tsv") {
+                system("cat '$inputroot/participants.tsv' | grep '^participant_id\\|^${dsname}' | tsv2json >  '$outputroot/${dsname}/participants.tsv.json'");
+            }
             system( "mergejson", "$outputroot/${dsname}" );    # merge subject-folder json files to a single .jbids file
             system( "bids2json", $outputroot, ${dsname} );     # merge all .jbids file into a single .json file
         } else {

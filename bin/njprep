@@ -91,6 +91,7 @@ MAX_TSV=${NJPREP_MAX_TSV:-65536}
 MAX_JSON=${NJPREP_MAX_JSON:-65536}
 MAX_BJSON=${NJPREP_MAX_BJSON:-65536}
 MAX_BVEC=${NJPREP_MAX_BVEC:-65536}
+MAX_MAT=${NJPREP_MAX_MAT:-2000000}
 FALLBACK_URL=${NJPREP_FALLBACK_URL:-""}
 USE_MATLAB=${NJPREP_MATLAB:-""}
 
@@ -99,9 +100,9 @@ USE_MATLAB=${NJPREP_MATLAB:-""}
 #===============================================================================
 
 main() {
-  if [[ $# -ge 5 ]]; then
+  if [[ $# -ge 5 && ! -z "$5" ]]; then
     convert_file "$1" "$2" "$4" "$5"
-  elif [[ $# -ge 4 ]]; then # convert a single dataset
+  elif [[ $# -ge 4 || ($# -ge 5 && -z "$5") ]]; then # convert a single dataset
     convert_dataset "$1" "$2" "$4"
     [[ -d "$2/$4" ]] && bids2json "$2" "$4"
   else
@@ -286,6 +287,34 @@ EOF
 [d1,d2]=snirf2jbids('$ff', 'pathhash', '${pathhash}', 'compression','zlib','attachproto','${ATTACH_URL}${dsname%/}&file=');
 savebj('', d2, 'filename', '$2/.att/$dsname/${pathhash}-zlib.jdb','compression','zlib');
 savejson('', d1, 'filename', '$2/${relpath}.json');
+EOF
+)
+     if [[ -n "${USE_MATLAB}" ]]; then
+         echo "$cmd;exit" | ${USE_MATLAB} -nojvm -nodesktop -nosplash
+     else
+         octave-cli --eval "$cmd"
+     fi
+
+  elif [[ "${ff##*.}" == "mat" ]]; then  # matlab mat files (if not a link) - use octave
+     [[ ! -d "$2/.att/$dsname" ]] && mkdir -p "$2/.att/$dsname/"
+     cmd=$(cat <<EOF
+data=load('$ff');
+fn=fieldnames(data);
+datainfo = dir('$ff');
+if(datainfo.bytes < ${MAX_MAT})
+    savejson('', data, 'filename', '$2/${relpath}.json', 'compression', 'zlib');
+else
+    savebj('', data, 'filename', '$2/.att/$dsname/${pathhash}-zlib.jdb','compression','zlib');
+    fileinfo = dir('$2/.att/$dsname/${pathhash}-zlib.jdb');
+    for i=1:length(fn)
+        item = data.(fn{i});
+        datainfo = whos('item');
+        if(datainfo.bytes > ${MAX_MAT}/length(fn))
+            data.(fn{i}) = struct(encodevarname('_DataLink_'), ['${ATTACH_URL}${dsname%/}&size=' num2str(fileinfo.bytes) 'file=${pathhash}-zlib.jdb:$.' fn{i}]);
+        end
+    end
+    savejson('', data, 'filename', '$2/${relpath}.json', 'compression', 'zlib');
+end
 EOF
 )
      if [[ -n "${USE_MATLAB}" ]]; then

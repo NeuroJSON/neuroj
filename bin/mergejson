@@ -18,7 +18,7 @@ for ff in ${topfolder%/}/*/
 do
   relpath=`realpath --relative-to="$topfolder" "$ff"`
   echo $relpath
-  jq -n 'reduce inputs as $s ({}; setpath(input_filename|sub("\\.(?<a>(tsv|nii|snirf|gz))\\.(jbids|json|jnii|jnirs)$";"."+.a)|sub("\\.jbids";"")|split("/")[1:];$s) )' ${relpath/}/**/*.{json,jbids,jnii,jnirs} > ${ff%/}.jbids
+  jq -n 'reduce inputs as $s ({}; setpath(input_filename|sub("\\.(?<a>(tsv|nii|snirf|gz|mat))\\.(jbids|json|jnii|jnirs)$";"."+.a)|sub("\\.jbids";"")|split("/")[1:];$s) )' ${relpath/}/**/*.{json,jbids,jnii,jnirs} > ${ff%/}.jbids
 done
 
 popd

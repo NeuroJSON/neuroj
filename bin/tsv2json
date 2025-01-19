@@ -16,11 +16,6 @@ tie %data, 'Tie::IxHash';
 
 $ispretty = 1;
 
-if ( @ARGV < 1 ) {
-    print "format: tsv2json tsvfile.tsv <output.json>\n";
-    exit;
-}
-
 $iscompress = ( defined $ENV{'NJPREP_ZIP_TSV'} ) ? $ENV{'NJPREP_ZIP_TSV'} : 0;
 $keymeta    = 0;
 
@@ -32,10 +27,14 @@ if ( $ARGV[0] =~ /participants\.[tc]sv$/ ) {
     $keymeta = 1;
 }
 
-open( $file, "<", $ARGV[0] ) or die "File '$ARGV[0]' can't be opened";
+if ( @ARGV >= 1 ) {
+    open( $file, "<", $ARGV[0] ) or die "File '$ARGV[0]' can't be opened";
+} else {
+    $file = \*STDIN;
+}
 my $delim = "\t";
 
-$delim = ',' if ( $ARGV[0] =~ /\.csv$/i );
+$delim = ',' if ( @ARGV >= 1 && $ARGV[0] =~ /\.csv$/i );
 
 while ( my $line = <$file> ) {
     if ( !@header ) {
