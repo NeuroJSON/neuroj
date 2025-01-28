@@ -261,7 +261,7 @@ data = np.genfromtxt('$ff', dtype=np.float32)
 jd.savet(data, '$2/${relpath}'+'.jbids', {'compression':'zlib'})
 EOF
      fi
-  elif [[ "${ff##*.}" == "nii"  || "${ff#*.}" == "nii.gz" ]]; then  # nii.gz files (if not a link) - use octave+jnifty toolbox
+  elif [[ "${ff##*.}" == "nii"  || "${ff#*.}" == "nii.gz" || "${ff#*.}" == "hdr" ]]; then  # nii.gz files (if not a link) - use octave+jnifty toolbox
      [[ ! -d "$2/.att/$dsname" ]] && mkdir -p "$2/.att/$dsname/"
      cmd=$(cat <<EOF
 nii = nii2jnii('$ff');
@@ -295,10 +295,10 @@ EOF
          octave-cli --eval "$cmd"
      fi
 
-  elif [[ "${ff##*.}" == "mat" ]]; then  # matlab mat files (if not a link) - use octave
+  elif [[ "${ff##*.}" == "mat" || "${ff##*.}" == "nirs ]]; then  # matlab mat files (if not a link) - use octave
      [[ ! -d "$2/.att/$dsname" ]] && mkdir -p "$2/.att/$dsname/"
      cmd=$(cat <<EOF
-data=load('$ff');
+data=load('$ff', '-mat');
 fn=fieldnames(data);
 datainfo = dir('$ff');
 if(datainfo.bytes < ${MAX_MAT})
