@@ -295,7 +295,7 @@ EOF
          octave-cli --eval "$cmd"
      fi
 
-  elif [[ "${ff##*.}" == "mat" || "${ff##*.}" == "nirs ]]; then  # matlab mat files (if not a link) - use octave
+  elif [[ "${ff##*.}" == "mat" ]]; then  # matlab mat files (if not a link) - use octave
      [[ ! -d "$2/.att/$dsname" ]] && mkdir -p "$2/.att/$dsname/"
      cmd=$(cat <<EOF
 data=load('$ff', '-mat');
@@ -323,7 +323,7 @@ EOF
          octave-cli --eval "$cmd"
      fi
 
-  elif [[ "${ff##*.}" =~ ^[Tt][Xx][Tt]$ || "${ff##*.}" == "md" || "${ff##*.}" == "rst" || "${fname%.*}" =~ ^(README|CHANGES|CITATION|LICENSE)$ ]]; then # text files
+  elif [[ "${ff##*.}" =~ ^[Tt][Xx][Tt]$ || "${ff##*.}" == "md" || "${ff##*.}" == "m" || "${ff##*.}" == "rst" || "${fname%.*}" =~ ^(README|CHANGES|CITATION|LICENSE)$ ]]; then # text files
      jq -Rsa . "$ff" > "$2/${relpath}.jbids"
 
   elif [[ "${ff##*.}" == "png" || "${ff##*.}" == "jpg" || "${ff##*.}" == "pdf" || "${ff#*.}" == "tsv.gz" ]]; then # browser readable documents
@@ -332,7 +332,7 @@ EOF
      pathhash=`echo -n "/${relpath2}" | md5sum | cut -d ' ' -f 1`
 
   else
-     fileurl=`echo "$relpath2" | perl -pe 's/([^^A-Za-z0-9\-_.!~*()'"'"'])/ sprintf "%%%0x", ord $1 /eg'`
+     fileurl=`echo -n "$relpath2" | perl -pe 's/([^^A-Za-z0-9\-_.!~*()'"'"'])/ sprintf "%%%0x", ord $1 /eg'`
      echo "{\"_DataLink_\" : \"${ATTACH_URL}${dsname%/}&size=$filesize&file=$fileurl\"}" > "$2/${relpath}.jbids"
      echo "skipping ${ff}"
   fi
