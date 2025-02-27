@@ -310,7 +310,7 @@ else
         item = data.(fn{i});
         datainfo = whos('item');
         if(datainfo.bytes > ${MAX_MAT}/length(fn))
-            data.(fn{i}) = struct(encodevarname('_DataLink_'), ['${ATTACH_URL}${dsname%/}&size=' num2str(fileinfo.bytes) 'file=${pathhash}-zlib.jdb:$.' fn{i}]);
+            data.(fn{i}) = struct(encodevarname('_DataLink_'), ['${ATTACH_URL}${dsname%/}&size=' num2str(fileinfo.bytes) '&file=${pathhash}-zlib.jdb:$.' fn{i}]);
         end
     end
     savejson('', data, 'filename', '$2/${relpath}.json', 'compression', 'zlib');
