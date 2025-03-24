@@ -5,7 +5,7 @@ Utilities to convert datasets to JSON and access RESTful data on NeuroJSON.io
 
 -   Maintainer: Qianqian Fang (q.fang at neu.edu)
 -   License: BSD 3-Clause License
--   Version: 0.5
+-   Version: 0.8
 -   Website: <https://neurojson.org>
 -   Docker image: <https://hub.docker.com/r/openjdata/neuroj>
 
@@ -87,7 +87,7 @@ structures to the CouchDB object hierarchies.
 | a dataset                             | a CouchDB document          | ds000001, ds000002, ...        |
 | files and folders related to a subject| JSON keys inside a document | sub-01, sub-1/anat/scan.tsv,...|
 | human-readable binary content (small) | an attachment to a document | .png, .jpg, .pdf, ...          |
-| non-searchable binary content (large) | `_DataLink_` JSON key       | `"_DataLink_":"http://url/to/ds/filehash.jbd"` |
+| non-searchable binary content (large) | `_DataLink_` JSON key       | `"_DataLink_":"https://url/to/ds/filehash.jbd"` |
 
 
 A CouchDB (similarly other NoSQL database engines) can hold and process enormous numbers of
@@ -317,7 +317,7 @@ For Linux and Mac OS:
 - libwww-perl (for LWP::UserAgent)
 - libjson-xs-perl (for JSON::XS)
 
-For Windows: please first install cygwin64 (http://cygwin.com/) or MSYS2 (http://msys2.org/)
+For Windows: please first install cygwin64 (https://cygwin.com/) or MSYS2 (https://msys2.org/)
 and also install the above packages in the corresponding cygwin64/msys2 installers.
 
 When converting datasets with `neuroj` or `njprep`, conversion for some of the data files,
