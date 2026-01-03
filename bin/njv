@@ -1,0 +1,361 @@
+#!/usr/bin/env perl
+# njv - BJData/Binary JSON and JSON viewer
+# Usage: njv file.jdb [--max-data 100] [--max-str 200] [--debug] [--big-endian]
+# BJData spec: https://neurojson.org/bjdata/draft3
+
+use strict;
+use warnings;
+use Getopt::Long;
+use Encode qw(decode);
+use Time::HiRes qw(time);
+
+# Use JSON::XS if available (10-100x faster), fall back to JSON::PP
+my $JSON_CLASS;
+BEGIN {
+    eval { require JSON::XS; JSON::XS->import(); $JSON_CLASS = 'JSON::XS'; };
+    if ($@) {
+        require JSON::PP; JSON::PP->import(); $JSON_CLASS = 'JSON::PP';
+    }
+}
+
+binmode(STDOUT, ':utf8');
+
+my ($max_data, $max_str, $debug, $big_endian) = (100, 200, 0, 0);
+GetOptions('max-data=i'=>\$max_data, 'max-str=i'=>\$max_str, 'debug'=>\$debug, 'big-endian|be'=>\$big_endian);
+die "Usage: njv <file> [--max-data N] [--max-str N] [--debug] [--big-endian]\n" unless @ARGV;
+
+my $filename = shift;
+my $T0 = time;
+open my $fh, '<:raw', $filename or die "Can't open $filename: $!";
+my $buf = do { local $/; <$fh> };
+close $fh;
+warn sprintf "Read file: %.3fs\n", time - $T0 if $debug;
+
+print "# File: $filename (" . length($buf) . " bytes)\n";
+print "# JSON backend: $JSON_CLASS\n" if $debug;
+print "# Mode: Big-endian (UBJSON/BJData Draft 1)\n" if $big_endian;
+print "\n";
+
+if ($debug) {
+    print "# First 256 bytes:\n";
+    for (my $off = 0; $off < 256 && $off < length($buf); $off += 16) {
+        my $chunk = substr($buf, $off, 16);
+        printf "  %04d: %-32s  %s\n", $off, unpack("H*", $chunk),
+            join '', map { $_ >= 32 && $_ < 127 ? chr($_) : '.' } unpack("C*", $chunk);
+    }
+    print "\n";
+}
+
+sub safe_decode {
+    my $bytes = shift;
+    my $str = eval { decode('UTF-8', $bytes, Encode::FB_CROAK) };
+    defined $str ? $str : decode('ISO-8859-1', $bytes);
+}
+
+sub add_key_order {
+    my ($val, $src, $src_ref) = @_;
+    $src_ref //= \$src;
+    return $val unless ref($val);
+    return [ map { add_key_order($_, undef, $src_ref) } @$val ] if ref($val) eq 'ARRAY';
+    if (ref($val) eq 'HASH') {
+        my @keys = keys %$val;
+        if (@keys <= 100) {
+            my %pos;
+            for my $k (@keys) {
+                my $qk = quotemeta($k);
+                if ($$src_ref =~ /"$qk"\s*:/) {
+                    $pos{$k} = $-[0];
+                } else {
+                    $pos{$k} = 999999;
+                }
+            }
+            @keys = sort { $pos{$a} <=> $pos{$b} } @keys;
+        } else {
+            @keys = sort @keys;
+        }
+        return { _keys => \@keys, _data => { map { $_ => add_key_order($val->{$_}, undef, $src_ref) } @keys } };
+    }
+    $val;
+}
+
+sub fmt_val {
+    my ($val, $indent) = @_;
+    $indent //= 0;
+    my $pad = "  " x $indent;
+    return "null" unless defined $val;
+    return $$val ? "true" : "false" if ref($val) eq 'SCALAR';
+    return $val if !ref($val) && $val =~ /^<.*>$/s;
+    if (!ref($val)) {
+        return $val if $val =~ /^-?[\d.eE+\-]+$/ && $val ne '';
+        my $str = length($val) > $max_str 
+            ? substr($val, 0, $max_str/2) . "..." . substr($val, -$max_str/2) . " (" . length($val) . " chars)" 
+            : $val;
+        return "\"$str\"";
+    }
+    if (ref($val) eq 'ARRAY') {
+        return "[]" unless @$val;
+        return "<array[" . @$val . "]: [" . join(", ", map { fmt_val($_) } @$val[0..3]) . ", ...]>" if @$val > $max_data;
+        if (@$val <= 10 && !grep { ref($_) } @$val) {
+            my $str = "[" . join(", ", map { fmt_val($_) } @$val) . "]";
+            return $str if length($str) < 80;
+        }
+        return "[\n" . join(",\n", map { "$pad  " . fmt_val($_, $indent+1) } @$val) . "\n$pad]";
+    }
+    if (ref($val) eq 'HASH') {
+        my @keys = exists $val->{_keys} ? @{$val->{_keys}} : sort keys %$val;
+        my $data = exists $val->{_data} ? $val->{_data} : $val;
+        return "{}" unless @keys;
+        return "<object[" . @keys . " keys]: { " . join(", ", map { "\"$_\": " . fmt_val($data->{$_}) } @keys[0..3]) . ", ... }>" if @keys > $max_data;
+        return "{\n" . join(",\n", map { "$pad  \"$_\": " . fmt_val($data->{$_}, $indent+1) } @keys) . "\n$pad}";
+    }
+    "$val";
+}
+
+# Detect JSON vs BJData
+# JSON: { followed by " or whitespace, [ followed by " or digit or whitespace or [ or {
+# BJData: { or [ followed by type markers (U, i, $, #, etc.)
+my $first = substr($buf, 0, 2);
+my $is_json = 0;
+if ($first =~ /^\s*[\[\{]/) {
+    my $second = substr($buf, 1, 1);
+    # BJData type markers that can follow { or [
+    $is_json = 1 if $second =~ /^[\s"0-9\-\[\{]/;
+}
+
+if ($is_json) {
+    my $out = $buf;
+    my $decoded;
+    
+    my $t1 = time;
+    eval { $decoded = $JSON_CLASS->new->utf8->allow_nonref->relaxed->decode($buf) };
+    warn sprintf "JSON decode: %.3fs\n", time - $t1 if $debug;
+    
+    if (!$decoded && $buf =~ /\n/) {
+        $t1 = time;
+        $out = '';
+        my ($in_string, $escaped) = (0, 0);
+        my $len = length($buf);
+        for (my $i = 0; $i < $len; $i++) {
+            my $c = substr($buf, $i, 1);
+            if ($escaped)                        { $out .= $c; $escaped = 0 }
+            elsif ($c eq '\\' && $in_string)     { $out .= $c; $escaped = 1 }
+            elsif ($c eq '"')                    { $out .= $c; $in_string = !$in_string }
+            elsif ($in_string && $c =~ /[\r\n]/) { }
+            else                                 { $out .= $c }
+        }
+        warn sprintf "Newline fix: %.3fs\n", time - $t1 if $debug;
+        $t1 = time;
+        eval { $decoded = $JSON_CLASS->new->utf8->allow_nonref->relaxed->decode($out) };
+        warn sprintf "JSON decode (retry): %.3fs\n", time - $t1 if $debug;
+    }
+    
+    if ($decoded) {
+        my $t2 = time;
+        my $ordered = length($out) < 100000 ? add_key_order($decoded, $out) : $decoded;
+        warn sprintf "Key ordering: %.3fs\n", time - $t2 if $debug;
+        $t2 = time;
+        my $output = fmt_val($ordered);
+        warn sprintf "Format: %.3fs\n", time - $t2 if $debug;
+        $t2 = time;
+        print $output, "\n";
+        warn sprintf "Print: %.3fs\n", time - $t2 if $debug;
+        exit 0;
+    }
+    print "# JSON parse failed: $@\n" if $debug && $@;
+}
+
+# BJData parsing
+my $endian = $big_endian ? '>' : '<';
+my %MARKERS = (
+    i => ['int8',1,"c"],         U => ['uint8',1,"C"],
+    I => ['int16',2,"s$endian"], u => ['uint16',2,"S$endian"],
+    l => ['int32',4,"l$endian"], m => ['uint32',4,"L$endian"],
+    L => ['int64',8,"q$endian"], M => ['uint64',8,"Q$endian"],
+    h => ['float16',2,"S$endian"],
+    d => ['float32',4,"f$endian"],
+    D => ['float64',8,"d$endian"],
+    C => ['char',1,'C'],
+    B => ['byte',1,'C'],
+);
+my %INT_TYPES = map { $_ => 1 } qw(i U I u l m L M);
+my ($pos, $depth) = (0, 0);
+
+sub remaining  { length($buf) - $pos }
+sub peek       { substr($buf, $pos, 1) }
+sub read_bytes { 
+    my $n = shift; 
+    die "EOF at $pos\n" if $pos + $n > length($buf); 
+    my $r = substr($buf, $pos, $n); 
+    $pos += $n; 
+    $r;
+}
+sub log_debug  { print "# " . sprintf("%6d", $pos) . ": " . ("  " x $depth) . "$_[0]\n" if $debug }
+
+sub half_to_float {
+    my ($sign, $exp, $mant) = (($_[0] >> 15) & 1, ($_[0] >> 10) & 0x1f, $_[0] & 0x3ff);
+    return 0.0 if $exp == 0 && $mant == 0;
+    return ($sign ? "-" : "") . "Inf" if $exp == 31 && $mant == 0;
+    return "NaN" if $exp == 31;
+    (1 - 2*$sign) * ($exp ? (1 + $mant/1024) * 2**($exp - 15) : $mant/1024 * 2**-14);
+}
+
+sub read_int {
+    my $marker = shift // read_bytes(1);
+    die "Expected int, got '$marker'\n" unless $INT_TYPES{$marker};
+    unpack($MARKERS{$marker}[2], read_bytes($MARKERS{$marker}[1]));
+}
+
+sub read_numeric {
+    my $marker = shift;
+    my $val = unpack($MARKERS{$marker}[2], read_bytes($MARKERS{$marker}[1]));
+    $marker eq 'h' ? half_to_float($val) : $val;
+}
+
+sub read_value {
+    my $marker = read_bytes(1);
+    log_debug("marker: " . (($marker ge ' ' && $marker lt "\x7f") ? $marker : sprintf("%02x", ord($marker))));
+    
+    return undef        if $marker eq 'Z';
+    return read_value() if $marker eq 'N';
+    return \1           if $marker eq 'T';
+    return \0           if $marker eq 'F';
+    return read_numeric($marker) if $marker =~ /^[iUIulmLMhdD]$/;
+    return chr(unpack('C', read_bytes(1))) if $marker eq 'C';
+    return unpack('C', read_bytes(1)) if $marker eq 'B';
+    if ($marker eq 'S') { my $len = read_int(); return $len ? safe_decode(read_bytes($len)) : "" }
+    if ($marker eq 'H') { return "HighPrec(" . safe_decode(read_bytes(read_int())) . ")" }
+    if ($marker eq '[') { log_debug("array ["); return read_array() }
+    if ($marker eq '{') { log_debug("object {"); return read_object() }
+    die "Unknown marker '$marker' at " . ($pos - 1) . "\n";
+}
+
+sub format_typed_array {
+    my ($elem_type, $count) = @_;
+    my ($name, $size, $fmt) = @{$MARKERS{$elem_type}};
+    my $total_bytes = $count * $size;
+    
+    if ($total_bytes > remaining()) {
+        return "<$name\[$count]: " . unpack("H*", substr(read_bytes(remaining()), 0, 32)) . "...>";
+    }
+    if ($count > $max_data) {
+        my $n = $count < 8 ? $count : 8;
+        my @preview = map { read_numeric($elem_type) } 1..$n;
+        read_bytes(($count - $n) * $size);
+        return "<$name\[$count]: [" . join(",", @preview[0..3]) . "]... (${total_bytes}B)>";
+    }
+    [ map { read_numeric($elem_type) } 1..$count ];
+}
+
+sub read_array {
+    my ($elem_type, $count);
+    $depth++;
+    
+    if (peek eq '$') { read_bytes(1); $elem_type = read_bytes(1); log_debug("type: $elem_type") }
+    if (peek eq '#') {
+        read_bytes(1);
+        if (peek eq '[') {
+            read_bytes(1);
+            my $col_major = (peek eq '[') ? (read_bytes(1), 1) : 0;
+            my @dims;
+            if (peek eq '$') {
+                read_bytes(1); 
+                my $dim_type = read_bytes(1);
+                read_bytes(1); 
+                my $ndim = read_int();
+                @dims = map { unpack($MARKERS{$dim_type}[2], read_bytes($MARKERS{$dim_type}[1])) } 1..$ndim;
+            } else {
+                push @dims, read_value() while peek ne ']';
+                read_bytes(1);
+            }
+            read_bytes(1) if $col_major && peek eq ']';
+            log_debug("dims: [@dims]");
+            
+            my $total = 1; 
+            $total *= $_ for @dims;
+            my ($name, $size, $fmt) = @{$MARKERS{$elem_type}};
+            my $total_bytes = $total * $size;
+            my $order = $col_major ? "col" : "row";
+            $depth--;
+            
+            if ($total_bytes > remaining()) {
+                return "<$name\[@dims] $order: " . unpack("H*", substr(read_bytes(remaining()), 0, 32)) . "...>";
+            }
+            if ($total > $max_data) {
+                my $n = $total < 8 ? $total : 8;
+                my @preview = map { read_numeric($elem_type) } 1..$n;
+                read_bytes(($total - $n) * $size);
+                return "<$name\[@dims] $order: [" . join(",", @preview[0..3]) . "]... (${total_bytes}B)>";
+            }
+            return "<$name\[@dims] $order: [" . join(",", map { read_numeric($elem_type) } 1..$total) . "]>";
+        }
+        log_debug("count marker: " . peek);
+        $count = read_int();
+        log_debug("count: $count");
+    }
+    
+    my $result;
+    if (defined $count && defined $elem_type) {
+        $result = format_typed_array($elem_type, $count);
+    } elsif (defined $count) {
+        $result = [ map { read_value() } 1..$count ];
+    } else {
+        $result = [];
+        push @$result, read_value() while peek ne ']';
+        read_bytes(1);
+        log_debug("array ]");
+    }
+    $depth--;
+    $result;
+}
+
+sub read_object {
+    my ($elem_type, $count);
+    $depth++;
+    
+    if (peek eq '$') { read_bytes(1); $elem_type = read_bytes(1); log_debug("type: $elem_type") }
+    if (peek eq '#') { read_bytes(1); $count = read_int(); log_debug("count: $count") }
+    
+    my (@keys, %data);
+    my $read_entry = sub {
+        my $key = safe_decode(read_bytes(read_int()));
+        log_debug("key: $key");
+        push @keys, $key;
+        $data{$key} = $elem_type ? read_numeric($elem_type) : read_value();
+    };
+    
+    if (defined $count) {
+        $read_entry->() for 1..$count;
+    } else {
+        $read_entry->() while peek ne '}';
+        read_bytes(1);
+        log_debug("object }");
+    }
+    $depth--;
+    { _keys => \@keys, _data => \%data };
+}
+
+eval {
+    my $t1 = time;
+    my $val = read_value();
+    warn sprintf "BJData parse: %.3fs\n", time - $t1 if $debug;
+    
+    $t1 = time;
+    my $output = fmt_val($val);
+    warn sprintf "Format: %.3fs\n", time - $t1 if $debug;
+    
+    $t1 = time;
+    print $output, "\n";
+    warn sprintf "Print: %.3fs\n", time - $t1 if $debug;
+    
+    print "\n# " . remaining() . " bytes remaining\n" if remaining() > 0;
+};
+if ($@) {
+    print "Error at $pos: $@\n";
+    my ($start, $end) = ($pos > 32 ? $pos - 32 : 0, $pos + 64 < length($buf) ? $pos + 64 : length($buf));
+    print "\nHex [$start:$end]:\n";
+    for (my $off = $start; $off < $end; $off += 16) {
+        my $chunk = substr($buf, $off, $off + 16 < $end ? 16 : $end - $off);
+        printf "  %04d: %-32s  %s\n", $off, unpack("H*", $chunk),
+            join '', map { $_ >= 32 && $_ < 127 ? chr($_) : '.' } unpack("C*", $chunk);
+    }
+}
