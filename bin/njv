@@ -1,6 +1,6 @@
 #!/usr/bin/env perl
-# njv - BJData/Binary JSON and JSON viewer
-# Usage: njv file.jdb [--max-data 100] [--max-str 200] [--debug] [--big-endian]
+# njv - BJData/Binary JSON and JSON viewer with SOA support
+# Usage: njv file.bjd [--max-data 100] [--max-str 200] [--debug] [--big-endian]
 # BJData spec: https://neurojson.org/bjdata/draft3
 
 use strict;
@@ -9,13 +9,10 @@ use Getopt::Long;
 use Encode qw(decode);
 use Time::HiRes qw(time);
 
-# Use JSON::XS if available (10-100x faster), fall back to JSON::PP
 my $JSON_CLASS;
 BEGIN {
     eval { require JSON::XS; JSON::XS->import(); $JSON_CLASS = 'JSON::XS'; };
-    if ($@) {
-        require JSON::PP; JSON::PP->import(); $JSON_CLASS = 'JSON::PP';
-    }
+    if ($@) { require JSON::PP; JSON::PP->import(); $JSON_CLASS = 'JSON::PP'; }
 }
 
 binmode(STDOUT, ':utf8');
@@ -25,57 +22,16 @@ GetOptions('max-data=i'=>\$max_data, 'max-str=i'=>\$max_str, 'debug'=>\$debug, '
 die "Usage: njv <file> [--max-data N] [--max-str N] [--debug] [--big-endian]\n" unless @ARGV;
 
 my $filename = shift;
-my $T0 = time;
 open my $fh, '<:raw', $filename or die "Can't open $filename: $!";
 my $buf = do { local $/; <$fh> };
 close $fh;
-warn sprintf "Read file: %.3fs\n", time - $T0 if $debug;
 
-print "# File: $filename (" . length($buf) . " bytes)\n";
-print "# JSON backend: $JSON_CLASS\n" if $debug;
-print "# Mode: Big-endian (UBJSON/BJData Draft 1)\n" if $big_endian;
-print "\n";
-
-if ($debug) {
-    print "# First 256 bytes:\n";
-    for (my $off = 0; $off < 256 && $off < length($buf); $off += 16) {
-        my $chunk = substr($buf, $off, 16);
-        printf "  %04d: %-32s  %s\n", $off, unpack("H*", $chunk),
-            join '', map { $_ >= 32 && $_ < 127 ? chr($_) : '.' } unpack("C*", $chunk);
-    }
-    print "\n";
-}
+print "# File: $filename (" . length($buf) . " bytes)\n\n";
 
 sub safe_decode {
     my $bytes = shift;
     my $str = eval { decode('UTF-8', $bytes, Encode::FB_CROAK) };
     defined $str ? $str : decode('ISO-8859-1', $bytes);
-}
-
-sub add_key_order {
-    my ($val, $src, $src_ref) = @_;
-    $src_ref //= \$src;
-    return $val unless ref($val);
-    return [ map { add_key_order($_, undef, $src_ref) } @$val ] if ref($val) eq 'ARRAY';
-    if (ref($val) eq 'HASH') {
-        my @keys = keys %$val;
-        if (@keys <= 100) {
-            my %pos;
-            for my $k (@keys) {
-                my $qk = quotemeta($k);
-                if ($$src_ref =~ /"$qk"\s*:/) {
-                    $pos{$k} = $-[0];
-                } else {
-                    $pos{$k} = 999999;
-                }
-            }
-            @keys = sort { $pos{$a} <=> $pos{$b} } @keys;
-        } else {
-            @keys = sort @keys;
-        }
-        return { _keys => \@keys, _data => { map { $_ => add_key_order($val->{$_}, undef, $src_ref) } @keys } };
-    }
-    $val;
 }
 
 sub fmt_val {
@@ -90,6 +46,7 @@ sub fmt_val {
         my $str = length($val) > $max_str 
             ? substr($val, 0, $max_str/2) . "..." . substr($val, -$max_str/2) . " (" . length($val) . " chars)" 
             : $val;
+        $str =~ s/"/\\"/g;
         return "\"$str\"";
     }
     if (ref($val) eq 'ARRAY') {
@@ -111,57 +68,11 @@ sub fmt_val {
     "$val";
 }
 
-# Detect JSON vs BJData
-# JSON: { followed by " or whitespace, [ followed by " or digit or whitespace or [ or {
-# BJData: { or [ followed by type markers (U, i, $, #, etc.)
-my $first = substr($buf, 0, 2);
-my $is_json = 0;
-if ($first =~ /^\s*[\[\{]/) {
-    my $second = substr($buf, 1, 1);
-    # BJData type markers that can follow { or [
-    $is_json = 1 if $second =~ /^[\s"0-9\-\[\{]/;
-}
-
+# Check for JSON vs BJData
+my $is_json = substr($buf, 0, 2) =~ /^\s*[\[\{]/ && substr($buf, 1, 1) =~ /^[\s"0-9\-\[\{]/;
 if ($is_json) {
-    my $out = $buf;
-    my $decoded;
-    
-    my $t1 = time;
-    eval { $decoded = $JSON_CLASS->new->utf8->allow_nonref->relaxed->decode($buf) };
-    warn sprintf "JSON decode: %.3fs\n", time - $t1 if $debug;
-    
-    if (!$decoded && $buf =~ /\n/) {
-        $t1 = time;
-        $out = '';
-        my ($in_string, $escaped) = (0, 0);
-        my $len = length($buf);
-        for (my $i = 0; $i < $len; $i++) {
-            my $c = substr($buf, $i, 1);
-            if ($escaped)                        { $out .= $c; $escaped = 0 }
-            elsif ($c eq '\\' && $in_string)     { $out .= $c; $escaped = 1 }
-            elsif ($c eq '"')                    { $out .= $c; $in_string = !$in_string }
-            elsif ($in_string && $c =~ /[\r\n]/) { }
-            else                                 { $out .= $c }
-        }
-        warn sprintf "Newline fix: %.3fs\n", time - $t1 if $debug;
-        $t1 = time;
-        eval { $decoded = $JSON_CLASS->new->utf8->allow_nonref->relaxed->decode($out) };
-        warn sprintf "JSON decode (retry): %.3fs\n", time - $t1 if $debug;
-    }
-    
-    if ($decoded) {
-        my $t2 = time;
-        my $ordered = length($out) < 100000 ? add_key_order($decoded, $out) : $decoded;
-        warn sprintf "Key ordering: %.3fs\n", time - $t2 if $debug;
-        $t2 = time;
-        my $output = fmt_val($ordered);
-        warn sprintf "Format: %.3fs\n", time - $t2 if $debug;
-        $t2 = time;
-        print $output, "\n";
-        warn sprintf "Print: %.3fs\n", time - $t2 if $debug;
-        exit 0;
-    }
-    print "# JSON parse failed: $@\n" if $debug && $@;
+    my $decoded = eval { $JSON_CLASS->new->utf8->allow_nonref->relaxed->decode($buf) };
+    if ($decoded) { print fmt_val($decoded), "\n"; exit 0 }
 }
 
 # BJData parsing
@@ -172,23 +83,15 @@ my %MARKERS = (
     l => ['int32',4,"l$endian"], m => ['uint32',4,"L$endian"],
     L => ['int64',8,"q$endian"], M => ['uint64',8,"Q$endian"],
     h => ['float16',2,"S$endian"],
-    d => ['float32',4,"f$endian"],
-    D => ['float64',8,"d$endian"],
-    C => ['char',1,'C'],
-    B => ['byte',1,'C'],
+    d => ['float32',4,"f$endian"], D => ['float64',8,"d$endian"],
+    C => ['char',1,'C'], B => ['byte',1,'C'],
 );
 my %INT_TYPES = map { $_ => 1 } qw(i U I u l m L M);
-my ($pos, $depth) = (0, 0);
+my ($pos, $depth, $schema_mode) = (0, 0, 0);
 
 sub remaining  { length($buf) - $pos }
-sub peek       { substr($buf, $pos, 1) }
-sub read_bytes { 
-    my $n = shift; 
-    die "EOF at $pos\n" if $pos + $n > length($buf); 
-    my $r = substr($buf, $pos, $n); 
-    $pos += $n; 
-    $r;
-}
+sub peek       { $pos < length($buf) ? substr($buf, $pos, 1) : '' }
+sub read_bytes { my $n = shift; die "EOF at $pos\n" if $pos + $n > length($buf); my $r = substr($buf, $pos, $n); $pos += $n; $r }
 sub log_debug  { print "# " . sprintf("%6d", $pos) . ": " . ("  " x $depth) . "$_[0]\n" if $debug }
 
 sub half_to_float {
@@ -206,41 +109,197 @@ sub read_int {
 }
 
 sub read_numeric {
-    my $marker = shift;
-    my $val = unpack($MARKERS{$marker}[2], read_bytes($MARKERS{$marker}[1]));
+    my ($marker, $bytes) = @_;
+    $bytes //= read_bytes($MARKERS{$marker}[1]);
+    my $val = unpack($MARKERS{$marker}[2], $bytes);
     $marker eq 'h' ? half_to_float($val) : $val;
 }
 
-sub read_value {
-    my $marker = read_bytes(1);
-    log_debug("marker: " . (($marker ge ' ' && $marker lt "\x7f") ? $marker : sprintf("%02x", ord($marker))));
+sub read_string {
+    my $len = read_int();
+    $len ? safe_decode(read_bytes($len)) : "";
+}
+
+sub read_value;
+sub read_array;
+sub read_object;
+
+# In schema mode, read_value returns field metadata instead of values
+sub read_schema_value {
+    my $marker = peek;
     
-    return undef        if $marker eq 'Z';
-    return read_value() if $marker eq 'N';
-    return \1           if $marker eq 'T';
-    return \0           if $marker eq 'F';
-    return read_numeric($marker) if $marker =~ /^[iUIulmLMhdD]$/;
-    return chr(unpack('C', read_bytes(1))) if $marker eq 'C';
-    return unpack('C', read_bytes(1)) if $marker eq 'B';
-    if ($marker eq 'S') { my $len = read_int(); return $len ? safe_decode(read_bytes($len)) : "" }
-    if ($marker eq 'H') { return "HighPrec(" . safe_decode(read_bytes(read_int())) . ")" }
-    if ($marker eq '[') { log_debug("array ["); return read_array() }
-    if ($marker eq '{') { log_debug("object {"); return read_object() }
-    die "Unknown marker '$marker' at " . ($pos - 1) . "\n";
+    if ($marker =~ /^[iUIulmLMhdDCB]$/) {
+        read_bytes(1);
+        return { type => $MARKERS{$marker}[0], bytes => $MARKERS{$marker}[1], marker => $marker };
+    }
+    if ($marker eq 'T') { read_bytes(1); return { type => 'bool', bytes => 1, marker => 'T' } }
+    if ($marker eq 'Z') { read_bytes(1); return { type => 'null', bytes => 0 } }
+    if ($marker eq 'S' || $marker eq 'H') {
+        read_bytes(1);
+        return { type => 'string', bytes => read_int(), enc => 'fixed' };
+    }
+    if ($marker eq '[') {
+        read_bytes(1);
+        if (peek eq '$') {  # Optimized: dict or offset string
+            read_bytes(1);
+            my $inner = read_bytes(1);
+            if ($inner eq 'S' || $inner eq 'H') {  # Dict: [$S#<n><strings>
+                read_bytes(1);
+                my $n = read_int();
+                my @dict = map { read_bytes(1); read_string() } 1..$n;
+                my $im = $n <= 255 ? 'U' : $n <= 65535 ? 'u' : 'm';
+                return { type => 'string', bytes => $MARKERS{$im}[1], enc => 'dict', dict => \@dict, im => $im };
+            }
+            if ($INT_TYPES{$inner}) {  # Offset: [$<type>]
+                read_bytes(1);
+                return { type => 'string', bytes => $MARKERS{$inner}[1], enc => 'offset', im => $inner };
+            }
+        }
+        # Fixed array: [d d d]
+        my (@elems, $bytes);
+        while (peek ne ']') {
+            my $e = read_schema_value();
+            push @elems, $e;
+            $bytes += $e->{bytes};
+        }
+        read_bytes(1);
+        return { type => 'array', bytes => $bytes, elems => \@elems };
+    }
+    if ($marker eq '{') {  # Nested struct schema
+        read_bytes(1);
+        my (@fields, $bytes);
+        while (peek ne '}') {
+            my $name = read_string();
+            my $f = read_schema_value();
+            $f->{name} = $name;
+            push @fields, $f;
+            $bytes += $f->{bytes};
+        }
+        read_bytes(1);
+        return { type => 'struct', bytes => $bytes, fields => \@fields };
+    }
+    die "Unknown schema marker: $marker";
+}
+
+sub decode_field {
+    my ($field, $payload, $offset, $rec_idx) = @_;
+    my $raw = substr($payload, $offset, $field->{bytes});
+    
+    return read_numeric($field->{marker}, $raw) if $field->{marker} && $field->{marker} =~ /^[iUIulmLMhdDCB]$/;
+    return substr($raw,0,1) eq 'T' ? \1 : \0 if $field->{type} eq 'bool';
+    return undef if $field->{type} eq 'null';
+    
+    if ($field->{type} eq 'string') {
+        if ($field->{enc} eq 'fixed') { $raw =~ s/\0+$//; return safe_decode($raw) }
+        if ($field->{enc} eq 'dict') { return $field->{dict}[read_numeric($field->{im}, $raw)] // '' }
+        if ($field->{enc} eq 'offset') {
+            # Use record index directly for offset lookup (payload stores 0,1,2,...)
+            my $idx = $rec_idx // read_numeric($field->{im}, $raw);
+            my $offsets = $field->{offsets};
+            return '' unless $offsets && defined $offsets->[$idx] && defined $offsets->[$idx+1];
+            my ($s, $e) = ($offsets->[$idx], $offsets->[$idx+1]);
+            return $e > $s ? safe_decode(substr($field->{strbuf}, $s, $e-$s)) : '';
+        }
+    }
+    if ($field->{type} eq 'array') {
+        my (@arr, $off);
+        for my $e (@{$field->{elems}}) {
+            push @arr, decode_field($e, $raw, $off, $rec_idx);
+            $off += $e->{bytes};
+        }
+        return \@arr;
+    }
+    if ($field->{type} eq 'struct') {
+        my (%rec, @keys, $off);
+        for my $f (@{$field->{fields}}) {
+            push @keys, $f->{name};
+            $rec{$f->{name}} = decode_field($f, $raw, $off, $rec_idx);
+            $off += $f->{bytes};
+        }
+        return { _keys => \@keys, _data => \%rec };
+    }
+    undef;
+}
+
+sub read_soa {
+    my $layout = shift;
+    log_debug("SOA ($layout-major)");
+    $depth++;
+    
+    # Parse schema (payload-less object)
+    read_bytes(1);  # {
+    my (@fields, $rec_bytes);
+    while (peek ne '}') {
+        my $name = read_string();
+        my $f = read_schema_value();
+        $f->{name} = $name;
+        push @fields, $f;
+        $rec_bytes += $f->{bytes};
+    }
+    read_bytes(1);  # }
+    
+    # Count/dims
+    read_bytes(1);  # #
+    my ($count, @dims) = (0);
+    if (peek eq '[') {
+        read_bytes(1);
+        push @dims, read_int(peek) while peek ne ']';
+        read_bytes(1);
+        $count = 1; $count *= $_ for @dims;
+    } else {
+        $count = read_int();
+        @dims = ($count);
+    }
+    
+    my $payload = read_bytes($rec_bytes * $count);
+    
+    # Read offset tables
+    for my $f (@fields) {
+        next unless ($f->{enc} // '') eq 'offset';
+        $f->{offsets} = [ map { read_numeric($f->{im}) } 0..$count ];
+        $f->{strbuf} = $f->{offsets}[-1] > 0 ? read_bytes($f->{offsets}[-1]) : '';
+    }
+    
+    $depth--;
+    
+    # Decode records (all for small data, preview for large)
+    my $decode_count = $count > $max_data ? 4 : $count;
+    my @records;
+    for my $i (0..$decode_count-1) {
+        my (%rec, @keys);
+        my $off = $layout eq 'col' ? 0 : $i * $rec_bytes;
+        for my $f (@fields) {
+            push @keys, $f->{name};
+            my $foff = $layout eq 'col' ? $off + $i * $f->{bytes} : $off;
+            $rec{$f->{name}} = decode_field($f, $payload, $foff, $i);
+            $off += $f->{bytes};
+        }
+        push @records, { _keys => \@keys, _data => \%rec };
+    }
+    
+    # Return summary with preview for large data
+    if ($count > $max_data) {
+        my $dims_str = @dims > 1 ? "@dims" : $count;
+        my @preview = map {
+            my $r = $_;
+            my @k = @{$r->{_keys}};
+            my $d = $r->{_data};
+            "{" . join(", ", map { "\"$_\": " . fmt_val($d->{$_}) } @k) . "}"
+        } @records;
+        return "<SOA $layout\[$dims_str]: " . join(", ", @preview) . ", ... (${\ ($rec_bytes * $count)}B)>";
+    }
+    \@records;
 }
 
 sub format_typed_array {
     my ($elem_type, $count) = @_;
-    my ($name, $size, $fmt) = @{$MARKERS{$elem_type}};
+    my ($name, $size) = @{$MARKERS{$elem_type}};
     my $total_bytes = $count * $size;
     
-    if ($total_bytes > remaining()) {
-        return "<$name\[$count]: " . unpack("H*", substr(read_bytes(remaining()), 0, 32)) . "...>";
-    }
+    return "<$name\[$count]: truncated>" if $total_bytes > remaining();
     if ($count > $max_data) {
-        my $n = $count < 8 ? $count : 8;
-        my @preview = map { read_numeric($elem_type) } 1..$n;
-        read_bytes(($count - $n) * $size);
+        my @preview = map { read_numeric($elem_type) } 1..8;
+        read_bytes(($count - 8) * $size);
         return "<$name\[$count]: [" . join(",", @preview[0..3]) . "]... (${total_bytes}B)>";
     }
     [ map { read_numeric($elem_type) } 1..$count ];
@@ -250,45 +309,38 @@ sub read_array {
     my ($elem_type, $count);
     $depth++;
     
-    if (peek eq '$') { read_bytes(1); $elem_type = read_bytes(1); log_debug("type: $elem_type") }
+    if (peek eq '$') {
+        read_bytes(1);
+        $elem_type = read_bytes(1);
+        if ($elem_type eq '{') { $pos--; $depth--; return read_soa('row') }
+        log_debug("type: $elem_type");
+    }
     if (peek eq '#') {
         read_bytes(1);
         if (peek eq '[') {
             read_bytes(1);
-            my $col_major = (peek eq '[') ? (read_bytes(1), 1) : 0;
+            my $col_major = peek eq '[' ? (read_bytes(1), 1) : 0;
             my @dims;
             if (peek eq '$') {
-                read_bytes(1); 
-                my $dim_type = read_bytes(1);
-                read_bytes(1); 
-                my $ndim = read_int();
-                @dims = map { unpack($MARKERS{$dim_type}[2], read_bytes($MARKERS{$dim_type}[1])) } 1..$ndim;
+                read_bytes(1); my $dt = read_bytes(1); read_bytes(1);
+                @dims = map { read_numeric($dt) } 1..read_int();
             } else {
                 push @dims, read_value() while peek ne ']';
                 read_bytes(1);
             }
             read_bytes(1) if $col_major && peek eq ']';
-            log_debug("dims: [@dims]");
-            
-            my $total = 1; 
-            $total *= $_ for @dims;
-            my ($name, $size, $fmt) = @{$MARKERS{$elem_type}};
-            my $total_bytes = $total * $size;
+            my $total = 1; $total *= $_ for @dims;
+            my $total_bytes = $total * $MARKERS{$elem_type}[1];
             my $order = $col_major ? "col" : "row";
             $depth--;
-            
-            if ($total_bytes > remaining()) {
-                return "<$name\[@dims] $order: " . unpack("H*", substr(read_bytes(remaining()), 0, 32)) . "...>";
-            }
+            return "<$MARKERS{$elem_type}[0]\[@dims] $order: truncated>" if $total_bytes > remaining();
             if ($total > $max_data) {
-                my $n = $total < 8 ? $total : 8;
-                my @preview = map { read_numeric($elem_type) } 1..$n;
-                read_bytes(($total - $n) * $size);
-                return "<$name\[@dims] $order: [" . join(",", @preview[0..3]) . "]... (${total_bytes}B)>";
+                my @p = map { read_numeric($elem_type) } 1..8;
+                read_bytes(($total - 8) * $MARKERS{$elem_type}[1]);
+                return "<$MARKERS{$elem_type}[0]\[@dims] $order: [" . join(",", @p[0..3]) . "]...>";
             }
-            return "<$name\[@dims] $order: [" . join(",", map { read_numeric($elem_type) } 1..$total) . "]>";
+            return "<$MARKERS{$elem_type}[0]\[@dims] $order: [" . join(",", map { read_numeric($elem_type) } 1..$total) . "]>";
         }
-        log_debug("count marker: " . peek);
         $count = read_int();
         log_debug("count: $count");
     }
@@ -302,7 +354,6 @@ sub read_array {
         $result = [];
         push @$result, read_value() while peek ne ']';
         read_bytes(1);
-        log_debug("array ]");
     }
     $depth--;
     $result;
@@ -312,41 +363,48 @@ sub read_object {
     my ($elem_type, $count);
     $depth++;
     
-    if (peek eq '$') { read_bytes(1); $elem_type = read_bytes(1); log_debug("type: $elem_type") }
+    if (peek eq '$') {
+        read_bytes(1);
+        $elem_type = read_bytes(1);
+        if ($elem_type eq '{') { $pos--; $depth--; return read_soa('col') }
+        log_debug("type: $elem_type");
+    }
     if (peek eq '#') { read_bytes(1); $count = read_int(); log_debug("count: $count") }
     
     my (@keys, %data);
     my $read_entry = sub {
         my $key = safe_decode(read_bytes(read_int()));
-        log_debug("key: $key");
         push @keys, $key;
         $data{$key} = $elem_type ? read_numeric($elem_type) : read_value();
     };
     
-    if (defined $count) {
-        $read_entry->() for 1..$count;
-    } else {
-        $read_entry->() while peek ne '}';
-        read_bytes(1);
-        log_debug("object }");
-    }
+    if (defined $count) { $read_entry->() for 1..$count }
+    else { $read_entry->() while peek ne '}'; read_bytes(1) }
     $depth--;
     { _keys => \@keys, _data => \%data };
 }
 
+sub read_value {
+    my $marker = read_bytes(1);
+    log_debug("marker: " . (($marker ge ' ' && $marker lt "\x7f") ? $marker : sprintf("%02x", ord($marker))));
+    
+    return undef        if $marker eq 'Z';
+    return read_value() if $marker eq 'N';
+    return \1           if $marker eq 'T';
+    return \0           if $marker eq 'F';
+    return read_numeric($marker) if $marker =~ /^[iUIulmLMhdD]$/;
+    return chr(unpack('C', read_bytes(1))) if $marker eq 'C';
+    return unpack('C', read_bytes(1)) if $marker eq 'B';
+    if ($marker eq 'S') { return read_string() }
+    if ($marker eq 'H') { return "HighPrec(" . read_string() . ")" }
+    if ($marker eq '[') { log_debug("array ["); return read_array() }
+    if ($marker eq '{') { log_debug("object {"); return read_object() }
+    die "Unknown marker '$marker' at " . ($pos - 1) . "\n";
+}
+
 eval {
-    my $t1 = time;
     my $val = read_value();
-    warn sprintf "BJData parse: %.3fs\n", time - $t1 if $debug;
-    
-    $t1 = time;
-    my $output = fmt_val($val);
-    warn sprintf "Format: %.3fs\n", time - $t1 if $debug;
-    
-    $t1 = time;
-    print $output, "\n";
-    warn sprintf "Print: %.3fs\n", time - $t1 if $debug;
-    
+    print fmt_val($val), "\n";
     print "\n# " . remaining() . " bytes remaining\n" if remaining() > 0;
 };
 if ($@) {
