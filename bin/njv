@@ -310,6 +310,7 @@ sub read_value {
     return unpack('C', read_bytes(1)) if $marker eq 'B';
     return read_str() if $marker eq 'S';
     return "HighPrec(".read_str().")" if $marker eq 'H';
+    return read_extension() if $marker eq 'E';
     if ($marker eq '[') { log_debug("array ["); return read_array() }
     if ($marker eq '{') { log_debug("object {"); return read_object() }
     die "Unknown marker '$marker' at ".($pos-1)."\n";
@@ -351,6 +352,13 @@ sub fmt_val {
         return "{\n".join(",\n", map {"$pad  \"$_\": ".fmt_val($data->{$_}, $ind+1)} @keys)."\n$pad}";
     }
     return "$val";
+}
+
+sub read_extension {
+    my $typeid = read_int();
+    my $bytelen = read_int();
+    my $hex = unpack("H*", read_bytes($bytelen));
+    "<ext:$typeid:$hex>";
 }
 
 # Try JSON first

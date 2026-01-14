@@ -69,6 +69,7 @@ class BJDataReader:
         if marker == b'C': return chr(self.read(1)[0])
         if marker == b'B': return self.read(1)[0]
         if marker in (b'S', b'H'): return self.read_string()
+        if marker == b'E': return self.read_extension()
         if marker == b'[': self.log("array ["); return self.read_array()
         if marker == b'{': self.log("object {"); return self.read_object()
         raise ValueError(f"Unknown marker {marker!r} at {self.pos-1}")
@@ -252,6 +253,12 @@ class BJDataReader:
             return {'name': name, 'type': 'struct', 'schema': sub_schema,
                     'bytes': sum(f['bytes'] for f in sub_schema)}
         raise ValueError(f"Unknown schema type {marker!r} at {self.pos}")
+
+    def read_extension(self):
+        typeid = self.read_int()
+        bytelen = self.read_int()
+        payload = self.read(bytelen)
+        return f"<ext:{typeid}:{payload.hex()}>"
 
     def decode_soa(self, schema, count, layout):
         record_bytes = sum(field['bytes'] for field in schema)
