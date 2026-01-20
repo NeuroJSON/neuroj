@@ -122,6 +122,12 @@ while ( my $opt = $ARGV[0] ) {
         } elsif ( $opt eq '-r' || $opt eq '--convert' ) {
             shift;
             $action{"convert"} = 1;
+        } elsif ( $opt eq '-e' || $opt eq '--export' ) {
+            shift;
+            $action{"export"} = 1;
+        } elsif ( $opt eq '-x' || $opt eq '--exportpath' ) {
+            shift;
+            $action{"exportpath"} = shift;
         } else {
             print("option not supported: $opt\n");
             shift;
@@ -183,6 +189,23 @@ if ( exists( $action{"list"} ) ) {
     my $content = webget($url);
     if ( $content ne '' ) {
         print $content;
+    }
+}
+
+if ( exists( $action{"export"} ) && $dbname ne '' && $dsname ne '' ) {
+    my $exportpath = $action{"exportpath"} || ".";
+    my $url =
+      ( $action{"rev"} ne '' )
+      ? "$serverurl/$dbname/$dsname?rev=" . $action{"rev"}
+      : "$serverurl/$dbname/$dsname";
+
+    print "Downloading dataset $dbname/$dsname ...\n";
+    my $content = webget($url);
+
+    if ( $content ne '' ) {
+        export_dataset( $content, $exportpath, $dsname, $dbname );
+    } else {
+        print "Error: Failed to download dataset\n";
     }
 }
 
@@ -385,11 +408,14 @@ sub convert {
 
     if ( $dsname ne '' ) {
         if ( $doconvert == 1 ) {
-            if((!-f "$outputroot/${dsname}/dataset_description.json") && -f "$inputroot/dataset_description.json") {
+            if ( ( !-f "$outputroot/${dsname}/dataset_description.json" ) && -f "$inputroot/dataset_description.json" )
+            {
                 system("cat '$inputroot/dataset_description.json' > '$outputroot/${dsname}/dataset_description.json'");
             }
-            if((!-f "$outputroot/${dsname}/participants.tsv.json") && -f "$inputroot/participants.tsv") {
-                system("cat '$inputroot/participants.tsv' | grep '^participant_id\\|^${dsname}' | tsv2json >  '$outputroot/${dsname}/participants.tsv.json'");
+            if ( ( !-f "$outputroot/${dsname}/participants.tsv.json" ) && -f "$inputroot/participants.tsv" ) {
+                system(
+"cat '$inputroot/participants.tsv' | grep '^participant_id\\|^${dsname}' | tsv2json >  '$outputroot/${dsname}/participants.tsv.json'"
+                );
             }
             system( "mergejson", "$outputroot/${dsname}" );    # merge subject-folder json files to a single .jbids file
             system( "bids2json", $outputroot, ${dsname} );     # merge all .jbids file into a single .json file
@@ -398,6 +424,568 @@ sub convert {
             print "bids2json\t'$outputroot'\t'${dsname}'\n";   # merge all .jbids file into a single .json file
         }
     }
+}
+
+sub export_dataset {
+    my ( $jsonstr, $exportpath, $dsname, $dbname ) = @_;
+
+    eval("use JSON::XS; 1") or do {
+        eval("use JSON::PP; 1") or die "JSON module not available";
+    };
+
+    my $json = JSON::XS->new->utf8->relaxed;
+    my $data;
+    eval { $data = $json->decode($jsonstr); };
+    if ($@) {
+        print "Error parsing JSON: $@\n";
+        return;
+    }
+
+    # Decode JData structures (_ArrayType_, _EnumKey_, etc.)
+    $data = decode_jdata($data);
+
+    my $dsdir = "$exportpath/$dsname";
+    system("mkdir -p '$dsdir'");
+
+    print "Exporting to $dsdir ...\n";
+    export_node( $data, $dsdir, $data, $dsname, $dbname );
+    print "Export complete: $dsdir\n";
+}
+
+sub export_node {
+    my ( $node, $currentpath, $rootdata, $dsname, $dbname ) = @_;
+
+    return unless ref($node) eq 'HASH';
+
+    foreach my $key ( keys %$node ) {
+        my $val         = $node->{$key};
+        my $decoded_key = $key;
+
+        # Check if it's a file (has extension)
+        if ( $decoded_key =~ /\.[^\.\/\\]+$/ && $decoded_key !~ /^\./ ) {
+            my $filepath = "$currentpath/$decoded_key";
+            my $filedir  = $filepath;
+            $filedir =~ s/\/[^\/]+$//;
+            system("mkdir -p '$filedir'") if $filedir ne $filepath && !-d $filedir;
+
+            if ( ref($val) eq 'HASH' && exists $val->{'_DataLink_'} ) {
+
+                # Handle _DataLink_
+                my $link = $val->{'_DataLink_'};
+                handle_datalink( $link, $filepath, $rootdata, $dsname, $dbname );
+            } elsif ( $decoded_key =~ /\.tsv$/i && ref($val) eq 'HASH' ) {
+
+                # TSV file - convert JSON back to TSV format
+                save_tsv_file( $filepath, $val );
+            } elsif ( ref($val) eq 'HASH' ) {
+
+                # JSON object -> save as JSON file
+                save_json_file( $filepath, $val );
+            } elsif ( ref($val) eq 'ARRAY' ) {
+
+                # Array -> save as JSON
+                save_json_file( $filepath, $val );
+            } elsif ( !ref($val) ) {
+
+                # Scalar (string) -> save as text
+                save_text_file( $filepath, $val );
+            }
+        } elsif ( ref($val) eq 'HASH' && scalar( keys %$val ) == 1 && exists $val->{'_DataLink_'} ) {
+
+            # _DataLink_ without file extension
+            my $link     = $val->{'_DataLink_'};
+            my $filepath = "$currentpath/$decoded_key";
+            handle_datalink( $link, $filepath, $rootdata, $dsname, $dbname );
+        } elsif ( ref($val) eq 'HASH' ) {
+
+            # Subdirectory
+            my $subdir = "$currentpath/$decoded_key";
+            system("mkdir -p '$subdir'");
+            export_node( $val, $subdir, $rootdata, $dsname, $dbname );
+        }
+    }
+}
+
+sub handle_datalink {
+    my ( $link, $filepath, $rootdata, $dsname, $dbname ) = @_;
+
+    if ( $link =~ /^\$\./ ) {
+
+        # Internal JSONPath reference -> create symlink
+        my $jsonpath = $link;
+        $jsonpath =~ s/^\$\.//;
+
+        # Convert JSONPath to relative file path
+        my $placeholder = "_0x2E_";
+        $jsonpath =~ s/\\\./$placeholder/g;
+        my @parts = split( /\./, $jsonpath );
+        @parts = map { s/$placeholder/./g; $_ } @parts;
+
+        my $relpath = join( "/", @parts );
+
+        # Calculate relative symlink target
+        my $filepath_dir = $filepath;
+        $filepath_dir =~ s/\/[^\/]+$//;
+        my $target = File::Spec->abs2rel( $relpath, $filepath_dir );
+
+        # Create symlink
+        if ( -e $filepath || -l $filepath ) {
+            unlink($filepath);
+        }
+        symlink( $target, $filepath ) or print "Warning: Could not create symlink $filepath -> $target\n";
+
+    } elsif ( $link =~ /^symlink:(.+)$/ ) {
+
+        # Explicit symlink
+        my $target = $1;
+        if ( -e $filepath || -l $filepath ) {
+            unlink($filepath);
+        }
+        symlink( $target, $filepath ) or print "Warning: Could not create symlink $filepath -> $target\n";
+
+    } elsif ( $link =~ /^https?:\/\// ) {
+
+        # External URL -> download
+        print "Downloading: $link\n";
+        download_file( $link, $filepath );
+
+    } else {
+
+        # Unknown link type
+        print "Warning: Unknown _DataLink_ format: $link\n";
+    }
+}
+
+sub download_file {
+    my ( $url, $filepath ) = @_;
+
+    # Extract JSONPath fragment if present (url:$.path.to.data)
+    my $jsonpath = "";
+    if ( $url =~ /^(.+):(\$\..+)$/ ) {
+        $url      = $1;
+        $jsonpath = $2;
+    }
+
+    # Use curl with -L to follow redirects, -f to fail on HTTP errors
+    my $content     = `curl -sLf "$url"`;
+    my $curl_status = $?;
+
+    if ( $curl_status != 0 || $content eq '' ) {
+        eval("use LWP::UserAgent (); 1") or do {
+            print "Warning: curl failed and LWP::UserAgent not available for $url\n";
+            return;
+        };
+        my $ua = LWP::UserAgent->new();
+        $ua->max_redirect(10);    # Follow up to 10 redirects
+        my $response = $ua->get($url);
+        if ( $response->is_success ) {
+            $content = $response->decoded_content;
+        } else {
+            print "Warning: Failed to download $url: " . $response->status_line . "\n";
+            return;
+        }
+    }
+
+    if ( $content ne '' ) {
+
+        # Check if it's binary or text based on file extension
+        my $is_binary = ( $filepath =~ /\.(bnii|bmsh|bnirs|jdb|bjd|png|jpg|jpeg|gif|pdf|nii|gz|snirf|mat)$/i );
+
+        my $filedir = $filepath;
+        $filedir =~ s/\/[^\/]+$//;
+        system("mkdir -p '$filedir'") if $filedir ne $filepath && !-d $filedir;
+
+        if ($is_binary) {
+            open( my $fh, '>:raw', $filepath ) or do {
+                print "Warning: Cannot write to $filepath\n";
+                return;
+            };
+            print $fh $content;
+            close($fh);
+        } else {
+            open( my $fh, '>:encoding(UTF-8)', $filepath ) or do {
+                print "Warning: Cannot write to $filepath\n";
+                return;
+            };
+            print $fh $content;
+            close($fh);
+        }
+        print "  Saved: $filepath\n";
+    }
+}
+
+sub save_json_file {
+    my ( $filepath, $data ) = @_;
+
+    eval("use JSON::XS; 1") or eval("use JSON::PP; 1");
+    my $json = JSON::XS->new->utf8->canonical;
+
+    open( my $fh, '>:encoding(UTF-8)', $filepath ) or do {
+        print "Warning: Cannot write to $filepath\n";
+        return;
+    };
+    print $fh $json->encode($data);
+    close($fh);
+}
+
+sub save_text_file {
+    my ( $filepath, $content ) = @_;
+
+    open( my $fh, '>:encoding(UTF-8)', $filepath ) or do {
+        print "Warning: Cannot write to $filepath\n";
+        return;
+    };
+    print $fh $content;
+    close($fh);
+}
+
+sub save_tsv_file {
+    my ( $filepath, $data ) = @_;
+
+    return unless ref($data) eq 'HASH';
+
+    my @keys;
+    my @values;
+    my $nrows = 0;
+
+    # Check if data uses _EnumKey_/_EnumValue_ encoding
+    if ( exists $data->{'_EnumKey_'} && exists $data->{'_EnumValue_'} ) {
+
+        # Decode _EnumKey_/_EnumValue_ format
+        @keys = @{ $data->{'_EnumKey_'} };
+        my $enumval = $data->{'_EnumValue_'};
+
+        if ( ref($enumval) eq 'ARRAY' && @$enumval > 0 ) {
+            if ( ref( $enumval->[0] ) eq 'ARRAY' ) {
+
+                # 2D array: each row is an array
+                $nrows  = scalar(@$enumval);
+                @values = @$enumval;
+            } else {
+
+                # 1D array: single row
+                $nrows  = 1;
+                @values = ( [@$enumval] );
+            }
+        }
+    } else {
+
+        # Standard column-oriented format: {col1: [...], col2: [...]}
+        @keys = keys %$data;
+        return unless @keys;
+
+        my $firstcol = $data->{ $keys[0] };
+        $nrows = ref($firstcol) eq 'ARRAY' ? scalar(@$firstcol) : 1;
+
+        # Convert to row-oriented for consistent processing
+        for my $i ( 0 .. $nrows - 1 ) {
+            my @row;
+            for my $key (@keys) {
+                my $col = $data->{$key};
+                my $val = ref($col) eq 'ARRAY' ? ( $col->[$i] // '' ) : $col;
+                push @row, $val;
+            }
+            push @values, \@row;
+        }
+    }
+
+    return unless @keys && $nrows > 0;
+
+    open( my $fh, '>:encoding(UTF-8)', $filepath ) or do {
+        print "Warning: Cannot write to $filepath\n";
+        return;
+    };
+
+    # Header
+    print $fh join( "\t", @keys ) . "\n";
+
+    # Data rows
+    for my $row (@values) {
+        my @formatted = map { defined($_) ? $_ : '' } @$row;
+        print $fh join( "\t", @formatted ) . "\n";
+    }
+    close($fh);
+    print "  Saved: $filepath\n";
+}
+
+sub decode_enum {
+
+    # Decode _EnumKey_/_EnumValue_ format to standard column-oriented hash
+    my ($data) = @_;
+
+    return $data unless ref($data) eq 'HASH';
+    return $data unless exists $data->{'_EnumKey_'} && exists $data->{'_EnumValue_'};
+
+    my @keys    = @{ $data->{'_EnumKey_'} };
+    my $enumval = $data->{'_EnumValue_'};
+    my %result;
+
+    # Initialize columns
+    for my $key (@keys) {
+        $result{$key} = [];
+    }
+
+    if ( ref($enumval) eq 'ARRAY' && @$enumval > 0 ) {
+        if ( ref( $enumval->[0] ) eq 'ARRAY' ) {
+
+            # 2D array: each element is a row
+            for my $row (@$enumval) {
+                for my $i ( 0 .. $#keys ) {
+                    push @{ $result{ $keys[$i] } }, $row->[$i];
+                }
+            }
+        } else {
+
+            # 1D array: single row
+            for my $i ( 0 .. $#keys ) {
+                push @{ $result{ $keys[$i] } }, $enumval->[$i];
+            }
+        }
+    }
+
+    return \%result;
+}
+
+sub decode_jdata {
+
+    # Recursively decode JData-encoded structures
+    # Supports: _ArrayType_/_ArraySize_/_ArrayData_, _ArrayZipType_/_ArrayZipData_,
+    #           _EnumKey_/_EnumValue_, _DataLink_, etc.
+    my ($data) = @_;
+
+    return $data unless ref($data);
+
+    if ( ref($data) eq 'ARRAY' ) {
+        return [ map { decode_jdata($_) } @$data ];
+    }
+
+    return $data unless ref($data) eq 'HASH';
+
+    # Check for JData array encoding
+    if ( exists $data->{'_ArrayData_'} || exists $data->{'_ArrayZipData_'} ) {
+        return decode_jdata_array($data);
+    }
+
+    # Check for _EnumKey_/_EnumValue_ encoding
+    if ( exists $data->{'_EnumKey_'} && exists $data->{'_EnumValue_'} ) {
+        my $decoded = decode_enum($data);
+
+        # Recursively decode values
+        for my $key ( keys %$decoded ) {
+            $decoded->{$key} = decode_jdata( $decoded->{$key} );
+        }
+        return $decoded;
+    }
+
+    # Recursively decode hash values
+    my %result;
+    for my $key ( keys %$data ) {
+        $result{$key} = decode_jdata( $data->{$key} );
+    }
+
+    return \%result;
+}
+
+sub decode_jdata_array {
+
+    # Decode JData array structures
+    # See: https://github.com/NeuroJSON/jdata/blob/master/JData_specification.md
+    my ($data) = @_;
+
+    my $arraytype     = $data->{'_ArrayType_'} || 'double';
+    my $arraysize     = $data->{'_ArraySize_'};
+    my $arraydata     = $data->{'_ArrayData_'};
+    my $arrayziptype  = $data->{'_ArrayZipType_'};
+    my $arrayzipdata  = $data->{'_ArrayZipData_'};
+    my $arrayzipsize  = $data->{'_ArrayZipSize_'};
+    my $arrayisstruct = $data->{'_ArrayIsStruct_'};
+    my $arrayissparse = $data->{'_ArrayIsSparse_'};
+
+    # Handle compressed data
+    if ( defined $arrayzipdata && defined $arrayziptype ) {
+        $arraydata = decode_compressed( $arrayzipdata, $arrayziptype, $arrayzipsize );
+    }
+
+    return $arraydata unless defined $arraydata;
+
+    # Handle base64 encoded data
+    if ( !ref($arraydata) && $arraydata =~ /^[A-Za-z0-9+\/=]+$/ ) {
+        eval { require MIME::Base64; };
+        if ( !$@ ) {
+            my $decoded = MIME::Base64::decode_base64($arraydata);
+            $arraydata = decode_typed_array( $decoded, $arraytype, $arraysize );
+        }
+    }
+
+    # Reshape array if needed
+    if ( defined $arraysize && ref($arraysize) eq 'ARRAY' && @$arraysize > 1 ) {
+        $arraydata = reshape_array( $arraydata, $arraysize );
+    }
+
+    return $arraydata;
+}
+
+sub decode_compressed {
+
+    # Decode compressed data (zlib, gzip, lzma, base64)
+    my ( $data, $ziptype, $zipsize ) = @_;
+
+    $ziptype = lc( $ziptype || '' );
+
+    # First decode base64 if the data is a string
+    if ( !ref($data) && $data =~ /^[A-Za-z0-9+\/=]+$/ ) {
+        eval { require MIME::Base64; };
+        return $data if $@;
+        $data = MIME::Base64::decode_base64($data);
+    }
+
+    return $data if ref($data);    # Already decoded
+
+    if ( $ziptype eq 'zlib' ) {
+        eval { require Compress::Zlib; };
+        if ( !$@ ) {
+            my $decoded = Compress::Zlib::uncompress($data);
+            return $decoded if defined $decoded;
+        }
+    } elsif ( $ziptype eq 'gzip' ) {
+        eval { require IO::Uncompress::Gunzip; };
+        if ( !$@ ) {
+            my $decoded;
+            IO::Uncompress::Gunzip::gunzip( \$data => \$decoded );
+            return $decoded if defined $decoded;
+        }
+    } elsif ( $ziptype eq 'lzma' || $ziptype eq 'lzip' ) {
+        eval { require Compress::Raw::Lzma; };
+        if ( !$@ ) {
+
+            # LZMA decompression
+            my ( $lzma, $status ) = Compress::Raw::Lzma::RawDecoder->new();
+            if ( $status == Compress::Raw::Lzma::LZMA_OK() ) {
+                my $decoded;
+                $lzma->code( $data, $decoded );
+                return $decoded if defined $decoded;
+            }
+        }
+    } elsif ( $ziptype eq 'base64' ) {
+
+        # Already handled above
+        return $data;
+    }
+
+    return $data;
+}
+
+sub decode_typed_array {
+
+    # Decode binary data to typed array based on _ArrayType_
+    my ( $bindata, $arraytype, $arraysize ) = @_;
+
+    return $bindata unless defined $bindata && defined $arraytype;
+
+    my %type_map = (
+        'int8'    => 'c',
+        'uint8'   => 'C',
+        'int16'   => 's<',
+        'uint16'  => 'S<',
+        'int32'   => 'l<',
+        'uint32'  => 'L<',
+        'int64'   => 'q<',
+        'uint64'  => 'Q<',
+        'single'  => 'f<',
+        'float'   => 'f<',
+        'float32' => 'f<',
+        'double'  => 'd<',
+        'float64' => 'd<',
+    );
+
+    my $pack_type = $type_map{ lc($arraytype) };
+    return $bindata unless $pack_type;
+
+    # Calculate total elements
+    my $total = 1;
+    if ( defined $arraysize && ref($arraysize) eq 'ARRAY' ) {
+        $total *= $_ for @$arraysize;
+    } else {
+
+        # Estimate from data length
+        my %type_size = (
+            'int8'    => 1,
+            'uint8'   => 1,
+            'int16'   => 2,
+            'uint16'  => 2,
+            'int32'   => 4,
+            'uint32'  => 4,
+            'int64'   => 8,
+            'uint64'  => 8,
+            'single'  => 4,
+            'float'   => 4,
+            'float32' => 4,
+            'double'  => 8,
+            'float64' => 8,
+        );
+        my $elem_size = $type_size{ lc($arraytype) } || 8;
+        $total = length($bindata) / $elem_size;
+    }
+
+    my @array = unpack( "($pack_type)$total", $bindata );
+    return \@array;
+}
+
+sub reshape_array {
+
+    # Reshape 1D array to multi-dimensional based on _ArraySize_
+    # Uses column-major (Fortran) order as per JData spec
+    my ( $data, $size ) = @_;
+
+    return $data unless ref($data) eq 'ARRAY' && ref($size) eq 'ARRAY';
+    return $data if @$size <= 1;
+
+    # For 2D arrays, reshape to array of arrays (rows)
+    if ( @$size == 2 ) {
+        my ( $nrows, $ncols ) = @$size;
+        my @result;
+        for my $col ( 0 .. $ncols - 1 ) {
+            for my $row ( 0 .. $nrows - 1 ) {
+                $result[$row][$col] = $data->[ $col * $nrows + $row ];
+            }
+        }
+        return \@result;
+    }
+
+    # For higher dimensions, return as-is (flattened)
+    # Full N-D reshape would be more complex
+    return $data;
+}
+
+sub encode_enum {
+
+    # Encode column-oriented hash to _EnumKey_/_EnumValue_ format
+    # This is used during conversion (tsv2json)
+    my ($data) = @_;
+
+    return $data unless ref($data) eq 'HASH';
+
+    my @keys = keys %$data;
+    return $data unless @keys;
+
+    my $firstcol = $data->{ $keys[0] };
+    my $nrows    = ref($firstcol) eq 'ARRAY' ? scalar(@$firstcol) : 1;
+
+    my @values;
+    for my $i ( 0 .. $nrows - 1 ) {
+        my @row;
+        for my $key (@keys) {
+            my $col = $data->{$key};
+            my $val = ref($col) eq 'ARRAY' ? $col->[$i] : $col;
+            push @row, $val;
+        }
+        push @values, \@row;
+    }
+
+    return {
+        '_EnumKey_'   => \@keys,
+        '_EnumValue_' => \@values
+    };
 }
 
 sub printhelp {
@@ -414,6 +1002,8 @@ Suported flags include
   -v/--rev revision       dataset revision key hash
   -r/--convert            convert database (-db) or dataset (-db .. -ds ..) (in parallel) to JSON
   -t/--threads num        set the thread number for parallel conversion (4 by default)
+  -e/--export             export a dataset to local folder structure (requires -db and -ds)
+  -x/--exportpath path    specify export destination folder (default: current directory)
 
  # list and query NeuroJSON.io (requires Internet)
   -l/--list               list all database if -db is given; or the dataset if both -db/-ds are given
@@ -491,6 +1081,15 @@ Examples:
 
    # query the dataset name "_id" and "dataset_description.json" records of the first two datasets in "openneuro" and format with jq
    neuroj -db openneuro --find '{"selector":{},"fields":["_id","dataset_description\\\\.json"],"limit":2}' | jq '.'
+
+   # export a dataset to current directory
+   neuroj --export -db openneuro -ds ds000001
+
+   # export a dataset to specific folder
+   neuroj --export -db openneuro -ds ds000001 --exportpath /data/exports
+
+   # export a specific revision
+   neuroj --export -db openneuro -ds ds000001 -v 1-abc123 --exportpath /data/exports
 }
     );
     exit 0;
